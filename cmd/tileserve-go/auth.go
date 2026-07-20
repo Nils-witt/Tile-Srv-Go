@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/subtle"
+	_ "embed"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -10,11 +11,18 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const tokenTTL = 24 * time.Hour
+const (
+	defaultTokenTTL = 24 * time.Hour
+	maxTokenTTL     = 7 * 24 * time.Hour
+)
+
+//go:embed login.html
+var loginPage []byte
 
 type loginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	TTLSeconds int64  `json:"ttl_seconds,omitempty"`
 }
 
 type loginResponse struct {
@@ -23,6 +31,12 @@ type loginResponse struct {
 
 func loginHandler(secret []byte, username, password string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(loginPage)
+			return
+		}
+
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -41,9 +55,17 @@ func loginHandler(secret []byte, username, password string) http.HandlerFunc {
 			return
 		}
 
+		ttl := defaultTokenTTL
+		if req.TTLSeconds > 0 {
+			ttl = time.Duration(req.TTLSeconds) * time.Second
+			if ttl > maxTokenTTL {
+				ttl = maxTokenTTL
+			}
+		}
+
 		claims := jwt.RegisteredClaims{
 			Subject:   req.Username,
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenTTL)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		}
 		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret)

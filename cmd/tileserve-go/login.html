@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tileserve-go login</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex;
+    min-height: 100vh;
+    margin: 0;
+    align-items: center;
+    justify-content: center;
+  }
+  .card {
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+    width: 100%;
+    max-width: 320px;
+  }
+  h1 { font-size: 1.1rem; margin: 0 0 1.25rem; }
+  label { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+  input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.5rem;
+    margin-bottom: 0.9rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 0.95rem;
+  }
+  button {
+    width: 100%;
+    padding: 0.55rem;
+    border: none;
+    border-radius: 4px;
+    background: #2563eb;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #result { margin-top: 1rem; }
+  #token {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: ui-monospace, monospace;
+    font-size: 0.78rem;
+    padding: 0.5rem;
+    resize: vertical;
+  }
+  #error { color: #dc2626; font-size: 0.85rem; margin-top: 0.75rem; }
+  #copy { margin-top: 0.5rem; background: #444; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Sign in to get a token</h1>
+    <form id="login-form">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <label for="ttl">Token lifetime (seconds, optional)</label>
+      <input id="ttl" name="ttl" type="number" min="1" placeholder="default">
+      <button type="submit" id="submit">Sign in</button>
+    </form>
+    <p id="error" class="hidden"></p>
+    <div id="result" class="hidden">
+      <label for="token">JWT</label>
+      <textarea id="token" rows="5" readonly></textarea>
+      <button id="copy" type="button">Copy to clipboard</button>
+    </div>
+  </div>
+  <script>
+    const form = document.getElementById('login-form');
+    const submit = document.getElementById('submit');
+    const errorEl = document.getElementById('error');
+    const resultEl = document.getElementById('result');
+    const tokenEl = document.getElementById('token');
+    const copyBtn = document.getElementById('copy');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.classList.add('hidden');
+      resultEl.classList.add('hidden');
+      submit.disabled = true;
+      submit.textContent = 'Signing in…';
+      try {
+        const ttlValue = document.getElementById('ttl').value;
+        const payload = {
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value,
+        };
+        if (ttlValue) {
+          payload.ttl_seconds = Number(ttlValue);
+        }
+        const res = await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          throw new Error(res.status === 401 ? 'Invalid credentials' : 'Login failed');
+        }
+        const data = await res.json();
+        tokenEl.value = data.token;
+        resultEl.classList.remove('hidden');
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.classList.remove('hidden');
+      } finally {
+        submit.disabled = false;
+        submit.textContent = 'Sign in';
+      }
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(tokenEl.value);
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = 'Copy to clipboard'; }, 1500);
+    });
+  </script>
+</body>
+</html>

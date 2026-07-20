@@ -15,8 +15,11 @@ go run ./cmd/tileserve-go \
 ## Usage
 
 ```sh
-# get a token
+# get a token (default TTL of 24h)
 curl -X POST localhost:8085/login -d '{"username":"admin","password":"changeme"}'
+
+# request a token with a custom TTL (in seconds, capped at 7 days)
+curl -X POST localhost:8085/login -d '{"username":"admin","password":"changeme","ttl_seconds":3600}'
 
 # use it to fetch a file
 curl -H "Authorization: Bearer <token>" localhost:8085/some-file.txt
