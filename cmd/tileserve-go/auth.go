@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/subtle"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"net/http"
@@ -10,6 +10,16 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+type contextKey string
+
+const usernameContextKey contextKey = "username"
+
+// usernameFromContext returns the JWT subject stored by requireAuth, or "" if absent.
+func usernameFromContext(ctx context.Context) string {
+	username, _ := ctx.Value(usernameContextKey).(string)
+	return username
+}
 
 const (
 	defaultTokenTTL = 24 * time.Hour
@@ -29,7 +39,7 @@ type loginResponse struct {
 	Token string `json:"token"`
 }
 
-func loginHandler(secret []byte, username, password string) http.HandlerFunc {
+func loginHandler(secret []byte, store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -48,9 +58,7 @@ func loginHandler(secret []byte, username, password string) http.HandlerFunc {
 			return
 		}
 
-		usernameMatch := subtle.ConstantTimeCompare([]byte(req.Username), []byte(username)) == 1
-		passwordMatch := subtle.ConstantTimeCompare([]byte(req.Password), []byte(password)) == 1
-		if !usernameMatch || !passwordMatch {
+		if err := store.Authenticate(r.Context(), req.Username, req.Password); err != nil {
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
@@ -90,7 +98,8 @@ func requireAuth(secret []byte, next http.Handler) http.Handler {
 			return
 		}
 
-		token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(t *jwt.Token) (interface{}, error) {
+		claims := &jwt.RegisteredClaims{}
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, jwt.ErrTokenSignatureInvalid
 			}
@@ -101,6 +110,7 @@ func requireAuth(secret []byte, next http.Handler) http.Handler {
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), usernameContextKey, claims.Subject)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

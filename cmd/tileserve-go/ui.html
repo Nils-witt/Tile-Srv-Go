@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tileserve-go admin</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0;
+    padding: 1.5rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1a1a1a; color: #eee; }
+    .card { background: #262626; }
+    input, select { background: #1a1a1a; color: #eee; border-color: #444; }
+    table { border-color: #333; }
+    th, td { border-color: #333; }
+    tr:hover { background: #232323; }
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  .card {
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+    margin-bottom: 1.25rem;
+  }
+  h1 { font-size: 1.2rem; margin: 0 0 1rem; }
+  h2 { font-size: 1rem; margin: 0 0 0.9rem; }
+  label { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+  input, select {
+    box-sizing: border-box;
+    padding: 0.5rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+  button {
+    padding: 0.45rem 0.8rem;
+    border: none;
+    border-radius: 4px;
+    background: #2563eb;
+    color: #fff;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  button.secondary { background: #555; }
+  button.danger { background: #b91c1c; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #ddd; vertical-align: top; }
+  th { font-weight: 600; }
+  .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  .row { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 0.75rem; }
+  .field { display: flex; flex-direction: column; }
+  #login-card { max-width: 320px; margin: 3rem auto; }
+  #error { color: #dc2626; font-size: 0.85rem; margin-top: 0.75rem; }
+  #top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+  .versions { font-size: 0.8rem; margin-top: 0.4rem; }
+  .versions ul { margin: 0.3rem 0 0; padding-left: 1.1rem; }
+  .hidden { display: none; }
+  .muted { opacity: 0.7; font-size: 0.8rem; }
+  code { font-size: 0.8rem; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="login-card" class="card hidden">
+      <h1>Sign in</h1>
+      <form id="login-form">
+        <div class="field" style="margin-bottom:0.9rem">
+          <label for="username">Username</label>
+          <input id="username" autocomplete="username" required>
+        </div>
+        <div class="field" style="margin-bottom:0.9rem">
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" id="login-submit" style="width:100%">Sign in</button>
+      </form>
+      <p id="error" class="hidden"></p>
+    </div>
+
+    <div id="app" class="hidden">
+      <div id="top">
+        <h1>Maps</h1>
+        <div>
+          <span class="muted" id="whoami"></span>
+          <button class="secondary" id="logout">Log out</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Create map</h2>
+        <form id="create-form" class="row">
+          <div class="field">
+            <label for="create-name">Name</label>
+            <input id="create-name" required>
+          </div>
+          <div class="field">
+            <label for="create-version">Current version (optional)</label>
+            <input id="create-version">
+          </div>
+          <button type="submit">Create</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <p id="app-error" class="hidden" style="color:#dc2626"></p>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Version</th>
+              <th>Created</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="maps-body"></tbody>
+        </table>
+        <p id="empty" class="muted hidden">No maps yet.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const TOKEN_KEY = 'tileserve_token';
+    const USER_KEY = 'tileserve_username';
+
+    const loginCard = document.getElementById('login-card');
+    const app = document.getElementById('app');
+    const loginForm = document.getElementById('login-form');
+    const loginSubmit = document.getElementById('login-submit');
+    const errorEl = document.getElementById('error');
+    const appErrorEl = document.getElementById('app-error');
+    const whoami = document.getElementById('whoami');
+    const mapsBody = document.getElementById('maps-body');
+    const emptyEl = document.getElementById('empty');
+
+    function getToken() { return sessionStorage.getItem(TOKEN_KEY); }
+    function setSession(token, username) {
+      sessionStorage.setItem(TOKEN_KEY, token);
+      sessionStorage.setItem(USER_KEY, username);
+    }
+    function clearSession() {
+      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(USER_KEY);
+    }
+
+    async function api(path, options = {}) {
+      const headers = Object.assign({}, options.headers, { Authorization: 'Bearer ' + getToken() });
+      const res = await fetch(path, Object.assign({}, options, { headers }));
+      if (res.status === 401) {
+        clearSession();
+        showLogin('Session expired, please sign in again.');
+        throw new Error('unauthorized');
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || ('request failed with status ' + res.status));
+      }
+      return res;
+    }
+
+    function showLogin(message) {
+      app.classList.add('hidden');
+      loginCard.classList.remove('hidden');
+      if (message) {
+        errorEl.textContent = message;
+        errorEl.classList.remove('hidden');
+      } else {
+        errorEl.classList.add('hidden');
+      }
+    }
+
+    function showApp() {
+      loginCard.classList.add('hidden');
+      app.classList.remove('hidden');
+      whoami.textContent = sessionStorage.getItem(USER_KEY) || '';
+      loadMaps();
+    }
+
+    function fmtDate(iso) {
+      const d = new Date(iso);
+      return isNaN(d) ? iso : d.toLocaleString();
+    }
+
+    function appError(message) {
+      if (!message) {
+        appErrorEl.classList.add('hidden');
+        return;
+      }
+      appErrorEl.textContent = message;
+      appErrorEl.classList.remove('hidden');
+    }
+
+    async function loadMaps() {
+      appError(null);
+      try {
+        const res = await api('/maps');
+        const maps = await res.json();
+        renderMaps(maps);
+      } catch (err) {
+        if (err.message !== 'unauthorized') appError(err.message);
+      }
+    }
+
+    function renderMaps(maps) {
+      mapsBody.innerHTML = '';
+      emptyEl.classList.toggle('hidden', maps.length > 0);
+      for (const m of maps) {
+        mapsBody.appendChild(renderMapRow(m));
+      }
+    }
+
+    function renderMapRow(m) {
+      const tr = document.createElement('tr');
+
+      const nameTd = document.createElement('td');
+      nameTd.textContent = m.name;
+
+      const versionTd = document.createElement('td');
+      versionTd.textContent = m.currentVersion || '-';
+
+      const createdTd = document.createElement('td');
+      createdTd.innerHTML = fmtDate(m.createdAt) + '<br><span class="muted">by ' + m.createdBy + '</span>';
+
+      const updatedTd = document.createElement('td');
+      updatedTd.innerHTML = fmtDate(m.updatedAt) + '<br><span class="muted">by ' + m.updatedBy + '</span>';
+
+      const actionsTd = document.createElement('td');
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'secondary';
+      editBtn.textContent = 'Edit';
+      editBtn.onclick = () => editMap(m);
+
+      const uploadBtn = document.createElement('button');
+      uploadBtn.className = 'secondary';
+      uploadBtn.textContent = 'Upload version';
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = '.zip';
+      fileInput.className = 'hidden';
+      fileInput.onchange = () => uploadVersion(m.uuid, fileInput.files[0]);
+      uploadBtn.onclick = () => fileInput.click();
+
+      const versionsBtn = document.createElement('button');
+      versionsBtn.className = 'secondary';
+      versionsBtn.textContent = 'Versions';
+      versionsBtn.onclick = () => toggleVersions(m.uuid, versionsDiv, versionsBtn);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'danger';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.onclick = () => deleteMap(m.uuid);
+
+      actions.append(editBtn, uploadBtn, fileInput, versionsBtn, deleteBtn);
+
+      const versionsDiv = document.createElement('div');
+      versionsDiv.className = 'versions hidden';
+
+      actionsTd.append(actions, versionsDiv);
+      tr.append(nameTd, versionTd, createdTd, updatedTd, actionsTd);
+      return tr;
+    }
+
+    async function toggleVersions(id, container, button) {
+      if (!container.classList.contains('hidden')) {
+        container.classList.add('hidden');
+        return;
+      }
+      appError(null);
+      try {
+        const res = await api('/maps/' + id + '/versions');
+        const versions = await res.json();
+        container.innerHTML = versions.length
+          ? '<ul>' + versions.map(v => '<li>v' + v.version + ' — ' + fmtDate(v.createdAt) + ' by ' + v.createdBy + '</li>').join('') + '</ul>'
+          : '<span class="muted">No versions uploaded yet.</span>';
+        container.classList.remove('hidden');
+      } catch (err) {
+        if (err.message !== 'unauthorized') appError(err.message);
+      }
+    }
+
+    async function createMap(name, currentVersion) {
+      appError(null);
+      try {
+        await api('/maps', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, currentVersion }),
+        });
+        await loadMaps();
+      } catch (err) {
+        if (err.message !== 'unauthorized') appError(err.message);
+      }
+    }
+
+    async function editMap(m) {
+      const name = prompt('Name', m.name);
+      if (name === null) return;
+      const currentVersion = prompt('Current version', m.currentVersion || '');
+      if (currentVersion === null) return;
+      appError(null);
+      try {
+        await api('/maps/' + m.uuid, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, currentVersion }),
+        });
+        await loadMaps();
+      } catch (err) {
+        if (err.message !== 'unauthorized') appError(err.message);
+      }
+    }
+
+    async function deleteMap(id) {
+      if (!confirm('Delete this map and all its versions?')) return;
+      appError(null);
+      try {
+        await api('/maps/' + id, { method: 'DELETE' });
+        await loadMaps();
+      } catch (err) {
+        if (err.message !== 'unauthorized') appError(err.message);
+      }
+    }
+
+    async function uploadVersion(id, file) {
+      if (!file) return;
+      appError(null);
+      try {
+        await api('/maps/' + id + '/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/zip' },
+          body: file,
+        });
+        await loadMaps();
+      } catch (err) {
+        if (err.message !== 'unauthorized') appError(err.message);
+      }
+    }
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.classList.add('hidden');
+      loginSubmit.disabled = true;
+      loginSubmit.textContent = 'Signing in…';
+      try {
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const res = await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        if (!res.ok) {
+          throw new Error(res.status === 401 ? 'Invalid credentials' : 'Login failed');
+        }
+        const data = await res.json();
+        setSession(data.token, username);
+        showApp();
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.classList.remove('hidden');
+      } finally {
+        loginSubmit.disabled = false;
+        loginSubmit.textContent = 'Sign in';
+      }
+    });
+
+    document.getElementById('logout').addEventListener('click', () => {
+      clearSession();
+      showLogin();
+    });
+
+    document.getElementById('create-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const name = document.getElementById('create-name').value;
+      const currentVersion = document.getElementById('create-version').value;
+      createMap(name, currentVersion).then(() => {
+        e.target.reset();
+      });
+    });
+
+    if (getToken()) {
+      showApp();
+    } else {
+      showLogin();
+    }
+  </script>
+</body>
+</html>

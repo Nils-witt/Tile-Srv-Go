@@ -4,8 +4,8 @@ Content-Type: application/json
 {"username": "demouser","password": "demouser"}
 
 ###
-### GET request to example server
-GET http://localhost:8085/test.txt
+### List maps
+GET http://localhost:8085/maps
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZW1vdXNlciIsImV4cCI6MTc4MzQyNzE0MiwiaWF0IjoxNzgzMzQwNzQyfQ.YJKomOAgYSPwuFpeqAMWxzitOzd3afFU4zr8HPypU-o
 ###
 
