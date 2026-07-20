@@ -59,9 +59,11 @@ func loginHandler(secret []byte, username, password string) http.HandlerFunc {
 
 func requireAuth(secret []byte, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		tokenString, ok := strings.CutPrefix(authHeader, "Bearer ")
+		tokenString, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || tokenString == "" {
+			tokenString = r.URL.Query().Get("token")
+		}
+		if tokenString == "" {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
 		}
