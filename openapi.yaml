@@ -1,0 +1,589 @@
+openapi: 3.0.3
+info:
+  title: tileserve-go
+  description: >
+    A small Go HTTP server for managing maps and their versioned tile uploads,
+    backed by Postgres and secured with JWT authentication. Maps have
+    versioned zip uploads extracted to `<data-root>/<uuid>/<version>/` on
+    disk, served back at `/maps/{id}/version/{version}/...`.
+  version: "1.0.0"
+servers:
+  - url: http://localhost:8085
+
+tags:
+  - name: auth
+    description: Login and token issuance
+  - name: maps
+    description: CRUD and version uploads for maps
+  - name: users
+    description: Admin-only user account management
+  - name: files
+    description: Serving extracted map/tile files
+  - name: ui
+    description: Browser-based management UI
+  - name: health
+    description: Health check
+
+security:
+  - bearerAuth: []
+  - tokenQuery: []
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Server is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /login:
+    get:
+      tags: [auth]
+      summary: Login page
+      description: Returns a self-contained HTML page with a sign-in form that obtains a JWT.
+      security: []
+      responses:
+        "200":
+          description: HTML login page
+          content:
+            text/html:
+              schema:
+                type: string
+    post:
+      tags: [auth]
+      summary: Exchange credentials for a JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login succeeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          description: Invalid request body
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Invalid credentials
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /ui/:
+    get:
+      tags: [ui]
+      summary: Management UI
+      description: >-
+        Self-contained HTML/JS page for managing maps (create/edit/delete,
+        upload versions, view history). The page itself is public; it signs
+        in via POST /login and drives the rest of this API with the
+        resulting token.
+      security: []
+      responses:
+        "200":
+          description: HTML management UI
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /maps:
+    get:
+      tags: [maps]
+      summary: List maps
+      responses:
+        "200":
+          description: Array of maps
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Map"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [maps]
+      summary: Create a map
+      description: Requires the acting user's `can_create` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MapRequest"
+      responses:
+        "201":
+          description: Map created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Map"
+        "400":
+          description: Invalid request body or missing name
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /maps/{id}:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+    get:
+      tags: [maps]
+      summary: Get a map
+      responses:
+        "200":
+          description: The map
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Map"
+        "400":
+          description: Invalid map id
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [maps]
+      summary: Replace a map's name/currentVersion
+      description: >
+        Requires the acting user's `can_edit` permission. Only `name` and
+        `currentVersion` are replaced; this does not touch the map_versions
+        history or any extracted files on disk.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MapRequest"
+      responses:
+        "200":
+          description: Updated map
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Map"
+        "400":
+          description: Invalid request body or missing name
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [maps]
+      summary: Delete a map
+      description: Requires the acting user's `can_delete` permission. Cascades and deletes the map's version history.
+      responses:
+        "204":
+          description: Map deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /maps/{id}/versions:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+    get:
+      tags: [maps]
+      summary: List a map's upload history
+      description: Returns every version ever uploaded for this map, most recent first.
+      responses:
+        "200":
+          description: Array of versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MapVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /maps/{id}/upload:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+    post:
+      tags: [maps]
+      summary: Upload a new map version
+      description: >
+        Requires the acting user's `can_create` permission. The request body
+        is a zip file (max 1 GiB), extracted to
+        `<data-root>/<uuid>/<version>/`. `<version>` is one more than the
+        highest version recorded in this map's history (0 if none yet); it is
+        never derived from the map's `currentVersion` field. On success both
+        `maps.current_version` and a new `map_versions` row are written
+        atomically. The zip's contents should form a numeric tile pyramid:
+        every directory name must be all digits, and every file must be named
+        `<number>.png` (e.g. `3/1/2.png`, or `5.png` at the top level).
+        Entries that don't match this (or are symlinks, or attempt path
+        traversal) are silently skipped rather than failing the upload; the
+        version is still created from whatever did extract successfully.
+      requestBody:
+        required: true
+        content:
+          application/zip:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: Version stored; returns the map with its updated currentVersion
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Map"
+        "400":
+          description: Unreadable zip archive
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          description: Upload exceeds the 1 GiB limit
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /users:
+    get:
+      tags: [users]
+      summary: List users
+      description: Requires the acting user's `is_admin` permission. Responses never include the password hash.
+      responses:
+        "200":
+          description: Array of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [users]
+      summary: Create a user
+      description: Requires the acting user's `is_admin` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Invalid request body, or missing username/password
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Username already taken
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /users/{username}:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [users]
+      summary: Update a user's permissions (and optionally password)
+      description: >-
+        Requires the acting user's `is_admin` permission. All four permission
+        flags are replaced (not partial); `password` is optional and, when
+        omitted or empty, leaves the existing password unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserRequest"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Invalid request body
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: User not found
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+    delete:
+      tags: [users]
+      summary: Delete a user
+      description: Requires the acting user's `is_admin` permission. You cannot delete your own account.
+      responses:
+        "204":
+          description: User deleted
+        "400":
+          description: Attempted to delete your own account
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: User not found
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /maps/{id}/version/{version}/{filePath}:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: filePath
+        in: path
+        required: true
+        schema:
+          type: string
+        description: >
+          Path of the file within this version's extracted contents, e.g.
+          `0/0/0.png`. This template represents one segment for documentation
+          purposes; the server actually serves arbitrarily nested paths under
+          `<data-root>/<id>/<version>/`.
+    get:
+      tags: [files]
+      summary: Fetch an extracted tile file from a map version
+      description: >-
+        Serves files straight out of `<data-root>/<id>/<version>/`. Any
+        authenticated user may read; no `can_*` permission is required.
+      responses:
+        "200":
+          description: File contents
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Version or file not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    tokenQuery:
+      type: apiKey
+      in: query
+      name: token
+      description: JWT passed as a query parameter instead of the Authorization header.
+
+  parameters:
+    MapId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: Missing, invalid, or expired token
+      content:
+        text/plain:
+          schema:
+            $ref: "#/components/schemas/ErrorMessage"
+    Forbidden:
+      description: Acting user lacks the required permission
+      content:
+        text/plain:
+          schema:
+            $ref: "#/components/schemas/ErrorMessage"
+    NotFound:
+      description: Map not found
+      content:
+        text/plain:
+          schema:
+            $ref: "#/components/schemas/ErrorMessage"
+
+  schemas:
+    ErrorMessage:
+      type: string
+      description: Plain-text error message.
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        ttl_seconds:
+          type: integer
+          format: int64
+          description: Requested token lifetime in seconds. Defaults to 24h; capped at 7 days.
+          example: 3600
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+
+    MapRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        currentVersion:
+          type: string
+
+    Map:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+        name:
+          type: string
+        currentVersion:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        updatedBy:
+          type: string
+
+    MapVersion:
+      type: object
+      properties:
+        version:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+
+    UserRequest:
+      type: object
+      required: [canCreate, canEdit, canDelete, isAdmin]
+      properties:
+        username:
+          type: string
+          description: Required when creating a user; ignored on update (the path parameter is authoritative).
+        password:
+          type: string
+          description: Required when creating a user. On update, optional — omit or leave empty to keep the current password.
+        canCreate:
+          type: boolean
+        canEdit:
+          type: boolean
+        canDelete:
+          type: boolean
+        isAdmin:
+          type: boolean
+
+    User:
+      type: object
+      properties:
+        username:
+          type: string
+        canCreate:
+          type: boolean
+        canEdit:
+          type: boolean
+        canDelete:
+          type: boolean
+        isAdmin:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
