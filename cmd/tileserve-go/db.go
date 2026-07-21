@@ -40,6 +40,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			can_create    BOOLEAN NOT NULL DEFAULT true,
 			can_edit      BOOLEAN NOT NULL DEFAULT true,
 			can_delete    BOOLEAN NOT NULL DEFAULT true,
+			is_admin      BOOLEAN NOT NULL DEFAULT true,
 			created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 		)
 	`)
@@ -51,6 +52,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS can_create BOOLEAN NOT NULL DEFAULT true;
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS can_edit   BOOLEAN NOT NULL DEFAULT true;
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS can_delete BOOLEAN NOT NULL DEFAULT true;
+		ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin   BOOLEAN NOT NULL DEFAULT true;
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate users permission columns: %w", err)
@@ -104,14 +106,15 @@ type Permissions struct {
 	CanCreate bool
 	CanEdit   bool
 	CanDelete bool
+	IsAdmin   bool
 }
 
-// GetPermissions returns the global create/edit/delete permissions for username.
+// GetPermissions returns the global create/edit/delete/admin permissions for username.
 func (s *Store) GetPermissions(ctx context.Context, username string) (Permissions, error) {
 	var p Permissions
 	err := s.pool.QueryRow(ctx, `
-		SELECT can_create, can_edit, can_delete FROM users WHERE username = $1
-	`, username).Scan(&p.CanCreate, &p.CanEdit, &p.CanDelete)
+		SELECT can_create, can_edit, can_delete, is_admin FROM users WHERE username = $1
+	`, username).Scan(&p.CanCreate, &p.CanEdit, &p.CanDelete, &p.IsAdmin)
 	if err != nil {
 		return Permissions{}, fmt.Errorf("get permissions for %q: %w", username, err)
 	}

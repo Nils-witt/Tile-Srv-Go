@@ -7,8 +7,8 @@ Users are stored in a Postgres `users` table (bcrypt-hashed passwords). Uploaded
 The full API is documented in [`openapi.yaml`](openapi.yaml) (OpenAPI 3.0) — view it with any Swagger/OpenAPI
 tool (e.g. paste into https://editor.swagger.io, or `npx @redocly/cli preview-docs openapi.yaml`).
 
-A simple browser UI for managing maps (create/edit/delete, upload versions, view history) is served at `/ui/`.
-It's a single static page — sign in there directly, it drives the same JSON API described below.
+A simple browser UI is served at `/ui/` — sign in there directly, it drives the same JSON API described below.
+It covers maps (create/edit/delete, upload versions, view history) and, for admins, user management.
 
 ## Run
 
@@ -87,13 +87,32 @@ non-numeric directories, non-`.png` files, non-numeric filenames, symlinks, path
 skipped (and logged server-side) rather than failing the whole upload; everything else in the zip still gets
 extracted and the version is still created (even if it ends up empty).
 
-Every user has three global permission flags — `can_create`, `can_edit`, `can_delete` — checked on the
-corresponding write requests (list/get are unrestricted for any authenticated user). Seeded/new users default
-to all three `true`. There's no management endpoint yet; toggle them directly in Postgres:
+Every user has four global permission flags — `can_create`, `can_edit`, `can_delete`, and `is_admin` — checked on
+the corresponding requests (map list/get are unrestricted for any authenticated user; `is_admin` gates the Users
+API below). Seeded/new users default to all four `true`.
 
-```sql
-UPDATE users SET can_delete = false WHERE username = 'someuser';
+### Users API
+
+Admin-only (`is_admin`) CRUD for managing accounts. Response objects never include the password hash.
+
+```sh
+# list users
+curl localhost:8085/users -H "Authorization: Bearer <token>"
+
+# create a user
+curl -X POST localhost:8085/users -H "Authorization: Bearer <token>" \
+  -d '{"username":"alice","password":"changeme","canCreate":true,"canEdit":true,"canDelete":false,"isAdmin":false}'
+
+# update permissions (and optionally password — omit/empty to leave it unchanged)
+curl -X PUT localhost:8085/users/alice -H "Authorization: Bearer <token>" \
+  -d '{"canCreate":true,"canEdit":true,"canDelete":true,"isAdmin":false,"password":"newpassword"}'
+
+# delete a user (you cannot delete your own account this way)
+curl -X DELETE localhost:8085/users/alice -H "Authorization: Bearer <token>"
 ```
+
+`PUT` always replaces all four permission flags (they're not optional/partial); `password` is the one optional
+field, left unchanged when omitted or empty.
 
 ## Config
 

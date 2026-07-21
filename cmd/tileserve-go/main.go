@@ -55,6 +55,8 @@ func main() {
 	mux.HandleFunc("/ui/", uiHandler())
 	mux.Handle("/maps", requireAuth(secret, mapsCollectionHandler(store)))
 	mux.Handle("/maps/", requireAuth(secret, mapsItemHandler(store, *dataRoot)))
+	mux.Handle("/users", requireAuth(secret, usersCollectionHandler(store)))
+	mux.Handle("/users/", requireAuth(secret, userItemHandler(store)))
 
 	addr := ":" + *port
 	log.Printf("tileserve-go listening on %s", addr)

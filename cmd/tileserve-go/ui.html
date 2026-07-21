@@ -62,6 +62,12 @@
   .hidden { display: none; }
   .muted { opacity: 0.7; font-size: 0.8rem; }
   code { font-size: 0.8rem; }
+  .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  .tabs button { background: transparent; color: inherit; border: 1px solid #999; }
+  .tabs button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .checkbox-cell { text-align: center; }
+  input[type=checkbox] { width: auto; padding: 0; }
+  input[type=password].inline { width: 10rem; }
 </style>
 </head>
 <body>
@@ -84,43 +90,98 @@
 
     <div id="app" class="hidden">
       <div id="top">
-        <h1>Maps</h1>
+        <h1>tileserve-go</h1>
         <div>
           <span class="muted" id="whoami"></span>
           <button class="secondary" id="logout">Log out</button>
         </div>
       </div>
 
-      <div class="card">
-        <h2>Create map</h2>
-        <form id="create-form" class="row">
-          <div class="field">
-            <label for="create-name">Name</label>
-            <input id="create-name" required>
-          </div>
-          <div class="field">
-            <label for="create-version">Current version (optional)</label>
-            <input id="create-version">
-          </div>
-          <button type="submit">Create</button>
-        </form>
+      <div class="tabs">
+        <button id="tab-maps-btn" class="active">Maps</button>
+        <button id="tab-users-btn" class="hidden">Users</button>
       </div>
 
-      <div class="card">
-        <p id="app-error" class="hidden" style="color:#dc2626"></p>
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Version</th>
-              <th>Created</th>
-              <th>Updated</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="maps-body"></tbody>
-        </table>
-        <p id="empty" class="muted hidden">No maps yet.</p>
+      <div id="tab-maps">
+        <div class="card">
+          <h2>Create map</h2>
+          <form id="create-form" class="row">
+            <div class="field">
+              <label for="create-name">Name</label>
+              <input id="create-name" required>
+            </div>
+            <div class="field">
+              <label for="create-version">Current version (optional)</label>
+              <input id="create-version">
+            </div>
+            <button type="submit">Create</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <p id="app-error" class="hidden" style="color:#dc2626"></p>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Version</th>
+                <th>Created</th>
+                <th>Updated</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="maps-body"></tbody>
+          </table>
+          <p id="empty" class="muted hidden">No maps yet.</p>
+        </div>
+      </div>
+
+      <div id="tab-users" class="hidden">
+        <div class="card">
+          <h2>Create user</h2>
+          <form id="create-user-form" class="row">
+            <div class="field">
+              <label for="cu-username">Username</label>
+              <input id="cu-username" required>
+            </div>
+            <div class="field">
+              <label for="cu-password">Password</label>
+              <input id="cu-password" type="password" required>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="cu-create" checked> Can create</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="cu-edit" checked> Can edit</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="cu-delete" checked> Can delete</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="cu-admin"> Admin</label>
+            </div>
+            <button type="submit">Create</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <p id="users-error" class="hidden" style="color:#dc2626"></p>
+          <table>
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th class="checkbox-cell">Create</th>
+                <th class="checkbox-cell">Edit</th>
+                <th class="checkbox-cell">Delete</th>
+                <th class="checkbox-cell">Admin</th>
+                <th>New password</th>
+                <th>Created</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="users-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -138,6 +199,12 @@
     const whoami = document.getElementById('whoami');
     const mapsBody = document.getElementById('maps-body');
     const emptyEl = document.getElementById('empty');
+    const usersBody = document.getElementById('users-body');
+    const usersErrorEl = document.getElementById('users-error');
+    const tabMapsBtn = document.getElementById('tab-maps-btn');
+    const tabUsersBtn = document.getElementById('tab-users-btn');
+    const tabMaps = document.getElementById('tab-maps');
+    const tabUsers = document.getElementById('tab-users');
 
     function getToken() { return sessionStorage.getItem(TOKEN_KEY); }
     function setSession(token, username) {
@@ -175,11 +242,31 @@
       }
     }
 
-    function showApp() {
+    async function showApp() {
       loginCard.classList.add('hidden');
       app.classList.remove('hidden');
       whoami.textContent = sessionStorage.getItem(USER_KEY) || '';
       loadMaps();
+
+      // GET /users itself doubles as the "am I admin" check: only admins are
+      // allowed to call it, so a 403 here just means "hide the Users tab".
+      try {
+        const res = await api('/users');
+        const users = await res.json();
+        tabUsersBtn.classList.remove('hidden');
+        renderUsers(users);
+      } catch (err) {
+        tabUsersBtn.classList.add('hidden');
+        showTab('maps');
+      }
+    }
+
+    function showTab(name) {
+      const showMaps = name === 'maps';
+      tabMaps.classList.toggle('hidden', !showMaps);
+      tabUsers.classList.toggle('hidden', showMaps);
+      tabMapsBtn.classList.toggle('active', showMaps);
+      tabUsersBtn.classList.toggle('active', !showMaps);
     }
 
     function fmtDate(iso) {
@@ -345,6 +432,143 @@
       }
     }
 
+    function usersError(message) {
+      if (!message) {
+        usersErrorEl.classList.add('hidden');
+        return;
+      }
+      usersErrorEl.textContent = message;
+      usersErrorEl.classList.remove('hidden');
+    }
+
+    async function loadUsers() {
+      usersError(null);
+      try {
+        const res = await api('/users');
+        renderUsers(await res.json());
+      } catch (err) {
+        if (err.message !== 'unauthorized') usersError(err.message);
+      }
+    }
+
+    function renderUsers(users) {
+      usersBody.innerHTML = '';
+      for (const u of users) {
+        usersBody.appendChild(renderUserRow(u));
+      }
+    }
+
+    function renderUserRow(u) {
+      const tr = document.createElement('tr');
+      const self = u.username === sessionStorage.getItem(USER_KEY);
+
+      const usernameTd = document.createElement('td');
+      usernameTd.textContent = u.username + (self ? ' (you)' : '');
+
+      const createCb = document.createElement('input');
+      createCb.type = 'checkbox';
+      createCb.checked = u.canCreate;
+      const editCb = document.createElement('input');
+      editCb.type = 'checkbox';
+      editCb.checked = u.canEdit;
+      const deleteCb = document.createElement('input');
+      deleteCb.type = 'checkbox';
+      deleteCb.checked = u.canDelete;
+      const adminCb = document.createElement('input');
+      adminCb.type = 'checkbox';
+      adminCb.checked = u.isAdmin;
+
+      const passwordInput = document.createElement('input');
+      passwordInput.type = 'password';
+      passwordInput.className = 'inline';
+      passwordInput.placeholder = 'leave blank to keep';
+
+      const createdTd = document.createElement('td');
+      createdTd.textContent = fmtDate(u.createdAt);
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'secondary';
+      saveBtn.textContent = 'Save';
+      saveBtn.onclick = () => updateUser(u.username, {
+        canCreate: createCb.checked,
+        canEdit: editCb.checked,
+        canDelete: deleteCb.checked,
+        isAdmin: adminCb.checked,
+        password: passwordInput.value,
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'danger';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.disabled = self;
+      if (self) deleteBtn.title = "You can't delete your own account";
+      deleteBtn.onclick = () => deleteUser(u.username);
+
+      const actionsTd = document.createElement('td');
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      actions.append(saveBtn, deleteBtn);
+      actionsTd.append(actions);
+
+      const passwordTd = document.createElement('td');
+      passwordTd.appendChild(passwordInput);
+
+      const createTd = document.createElement('td');
+      createTd.className = 'checkbox-cell';
+      createTd.appendChild(createCb);
+      const editTd = document.createElement('td');
+      editTd.className = 'checkbox-cell';
+      editTd.appendChild(editCb);
+      const deleteTd = document.createElement('td');
+      deleteTd.className = 'checkbox-cell';
+      deleteTd.appendChild(deleteCb);
+      const adminTd = document.createElement('td');
+      adminTd.className = 'checkbox-cell';
+      adminTd.appendChild(adminCb);
+
+      tr.append(usernameTd, createTd, editTd, deleteTd, adminTd, passwordTd, createdTd, actionsTd);
+      return tr;
+    }
+
+    async function createUser(payload) {
+      usersError(null);
+      try {
+        await api('/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        await loadUsers();
+      } catch (err) {
+        if (err.message !== 'unauthorized') usersError(err.message);
+      }
+    }
+
+    async function updateUser(username, payload) {
+      usersError(null);
+      try {
+        await api('/users/' + encodeURIComponent(username), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        await loadUsers();
+      } catch (err) {
+        if (err.message !== 'unauthorized') usersError(err.message);
+      }
+    }
+
+    async function deleteUser(username) {
+      if (!confirm('Delete user "' + username + '"?')) return;
+      usersError(null);
+      try {
+        await api('/users/' + encodeURIComponent(username), { method: 'DELETE' });
+        await loadUsers();
+      } catch (err) {
+        if (err.message !== 'unauthorized') usersError(err.message);
+      }
+    }
+
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       errorEl.classList.add('hidden');
@@ -384,6 +608,27 @@
       const currentVersion = document.getElementById('create-version').value;
       createMap(name, currentVersion).then(() => {
         e.target.reset();
+      });
+    });
+
+    tabMapsBtn.addEventListener('click', () => showTab('maps'));
+    tabUsersBtn.addEventListener('click', () => { showTab('users'); loadUsers(); });
+
+    document.getElementById('create-user-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const payload = {
+        username: document.getElementById('cu-username').value,
+        password: document.getElementById('cu-password').value,
+        canCreate: document.getElementById('cu-create').checked,
+        canEdit: document.getElementById('cu-edit').checked,
+        canDelete: document.getElementById('cu-delete').checked,
+        isAdmin: document.getElementById('cu-admin').checked,
+      };
+      createUser(payload).then(() => {
+        e.target.reset();
+        document.getElementById('cu-create').checked = true;
+        document.getElementById('cu-edit').checked = true;
+        document.getElementById('cu-delete').checked = true;
       });
     });
 
