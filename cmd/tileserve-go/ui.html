@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tileserve-go admin</title>
+<link rel="stylesheet" href="/ui/vendor/maplibre-gl.css">
 <style>
   :root { color-scheme: light dark; }
   body {
@@ -75,6 +76,40 @@
     padding: 1.5rem 0 0.5rem;
   }
   footer a { color: inherit; }
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .modal-overlay.hidden { display: none; }
+  .modal {
+    background: #fff;
+    border-radius: 8px;
+    width: min(960px, 92vw);
+    height: min(680px, 88vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+  }
+  @media (prefers-color-scheme: dark) {
+    .modal { background: #262626; }
+    .modal-header { border-color: #333 !important; }
+  }
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #ddd;
+    flex-shrink: 0;
+  }
+  .modal-header h2 { margin: 0; }
+  #preview-map { flex: 1; min-height: 0; }
 </style>
 </head>
 <body>
@@ -202,6 +237,17 @@
     </footer>
   </div>
 
+  <div id="preview-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="preview-title">Preview</h2>
+        <button class="secondary" id="preview-close">Close</button>
+      </div>
+      <div id="preview-map"></div>
+    </div>
+  </div>
+
+  <script src="/ui/vendor/maplibre-gl.js"></script>
   <script>
     const TOKEN_KEY = 'tileserve_token';
     const USER_KEY = 'tileserve_username';
@@ -357,12 +403,19 @@
       versionsBtn.textContent = 'Versions';
       versionsBtn.onclick = () => toggleVersions(m.uuid, versionsDiv, versionsBtn);
 
+      const previewBtn = document.createElement('button');
+      previewBtn.className = 'secondary';
+      previewBtn.textContent = 'Preview';
+      previewBtn.disabled = !m.currentVersion;
+      if (!m.currentVersion) previewBtn.title = 'No uploaded version yet';
+      previewBtn.onclick = () => openPreview(m);
+
       const deleteBtn = document.createElement('button');
       deleteBtn.className = 'danger';
       deleteBtn.textContent = 'Delete';
       deleteBtn.onclick = () => deleteMap(m.uuid);
 
-      actions.append(editBtn, uploadBtn, fileInput, versionsBtn, deleteBtn);
+      actions.append(editBtn, uploadBtn, fileInput, versionsBtn, previewBtn, deleteBtn);
 
       const versionsDiv = document.createElement('div');
       versionsDiv.className = 'versions hidden';
@@ -432,6 +485,66 @@
         if (err.message !== 'unauthorized') appError(err.message);
       }
     }
+
+    const previewOverlay = document.getElementById('preview-overlay');
+    const previewTitle = document.getElementById('preview-title');
+    const previewMapEl = document.getElementById('preview-map');
+    const previewClose = document.getElementById('preview-close');
+    let previewMap = null;
+
+    async function openPreview(m) {
+      if (!m.currentVersion) return;
+      previewTitle.textContent = m.name + ' — v' + m.currentVersion;
+      previewOverlay.classList.remove('hidden');
+
+      const tileUrl = window.location.origin + '/maps/' + m.uuid + '/version/' + m.currentVersion +
+        '/{z}/{x}/{y}.png?token=' + encodeURIComponent(getToken());
+
+      // Centered on the world at zoom 1 as a fallback if bounds can't be
+      // determined; otherwise centered on the tileset at a zoom level that
+      // actually has tiles, so the preview shows something immediately.
+      let center = [0, 0];
+      let zoom = 1;
+      try {
+        const res = await api('/maps/' + m.uuid + '/version/' + m.currentVersion + '/bounds');
+        const bounds = await res.json();
+        center = [bounds.centerLng, bounds.centerLat];
+        zoom = bounds.minZoom;
+      } catch (err) {
+        // fall back to the world view above
+      }
+
+      previewMap = new maplibregl.Map({
+        container: previewMapEl,
+        style: {
+          version: 8,
+          sources: {
+            tiles: {
+              type: 'raster',
+              tiles: [tileUrl],
+              tileSize: 256,
+            },
+          },
+          layers: [{ id: 'tiles', type: 'raster', source: 'tiles' }],
+        },
+        center,
+        zoom,
+      });
+      previewMap.addControl(new maplibregl.NavigationControl());
+    }
+
+    function closePreview() {
+      previewOverlay.classList.add('hidden');
+      if (previewMap) {
+        previewMap.remove();
+        previewMap = null;
+      }
+    }
+
+    previewClose.addEventListener('click', closePreview);
+    previewOverlay.addEventListener('click', (e) => {
+      if (e.target === previewOverlay) closePreview();
+    });
 
     async function uploadVersion(id, file) {
       if (!file) return;

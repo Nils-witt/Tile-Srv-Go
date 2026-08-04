@@ -8,7 +8,9 @@ The full API is documented in [`openapi.yaml`](openapi.yaml) (OpenAPI 3.0) — v
 tool (e.g. paste into https://editor.swagger.io, or `npx @redocly/cli preview-docs openapi.yaml`).
 
 A simple browser UI is served at `/ui/` — sign in there directly, it drives the same JSON API described below.
-It covers maps (create/edit/delete, upload versions, view history) and, for admins, user management.
+It covers maps (create/edit/delete, upload versions, view history, preview on an interactive
+[MapLibre GL](https://maplibre.org/) map) and, for admins, user management. MapLibre is vendored under
+`cmd/tileserve-go/vendor/` and served from `/ui/vendor/`, so the UI has no external dependencies at runtime.
 
 ## Run
 
@@ -69,10 +71,16 @@ curl localhost:8085/maps/<uuid>/versions -H "Authorization: Bearer <token>"
 
 # fetch an extracted tile file from a given version
 curl localhost:8085/maps/<uuid>/version/<version>/0/0/0.png -H "Authorization: Bearer <token>"
+
+# compute the real-world bounds of a version's tile pyramid (used by the UI to center/zoom the preview map)
+curl localhost:8085/maps/<uuid>/version/<version>/bounds -H "Authorization: Bearer <token>"
 ```
 
 `GET /maps/<uuid>/version/<version>/...` serves files straight out of `<data-root>/<uuid>/<version>/` (any
-authenticated user, no `can_*` permission required — same as the other read endpoints).
+authenticated user, no `can_*` permission required — same as the other read endpoints). `.../bounds` is computed
+on the fly by scanning that directory's `z/x/y.png` layout (no bounds are stored): it returns the lon/lat bounding
+box of the tiles at the lowest zoom level present, along with that level as `minZoom` and the highest level present
+as `maxZoom`.
 
 Each `/upload` writes a row (`version`, `createdAt`, `createdBy`) to a separate `map_versions` table in the same
 transaction that bumps the map's `currentVersion`, giving a full history of every version ever uploaded. That

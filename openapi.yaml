@@ -408,6 +408,36 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
 
+  /maps/{id}/version/{version}/bounds:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [files]
+      summary: Compute the real-world extent of a map version's tile pyramid
+      description: >-
+        Scans the extracted `z/x/y.png` files under
+        `<data-root>/<id>/<version>/` (no bounds are stored) and returns the
+        lon/lat bounding box, derived from the tiles at the lowest zoom level
+        present, plus that level as `minZoom` and the highest level present as
+        `maxZoom`. Intended for initializing a preview map's view. Any
+        authenticated user may call this; no `can_*` permission is required.
+      responses:
+        "200":
+          description: Computed bounds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TileBounds"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Version not found or has no tiles
+
   /maps/{id}/version/{version}/{filePath}:
     parameters:
       - $ref: "#/components/parameters/MapId"
@@ -551,6 +581,34 @@ components:
           format: date-time
         createdBy:
           type: string
+
+    TileBounds:
+      type: object
+      properties:
+        minZoom:
+          type: integer
+          description: Lowest zoom level with tiles on disk; used as the bounding box source.
+        maxZoom:
+          type: integer
+          description: Highest zoom level with tiles on disk.
+        west:
+          type: number
+          format: double
+        south:
+          type: number
+          format: double
+        east:
+          type: number
+          format: double
+        north:
+          type: number
+          format: double
+        centerLng:
+          type: number
+          format: double
+        centerLat:
+          type: number
+          format: double
 
     UserRequest:
       type: object
