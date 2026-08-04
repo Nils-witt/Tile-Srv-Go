@@ -471,7 +471,7 @@
       uploadBtn.textContent = 'Upload version';
       const fileInput = document.createElement('input');
       fileInput.type = 'file';
-      fileInput.accept = '.zip';
+      fileInput.accept = '.zip,.tar,.tar.gz,.tgz';
       fileInput.className = 'hidden';
       fileInput.onchange = () => uploadVersion(m.uuid, fileInput.files[0]);
       uploadBtn.onclick = () => fileInput.click();
@@ -796,7 +796,7 @@
       try {
         await api('/maps/' + id + '/upload', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/zip' },
+          headers: { 'Content-Type': file.type || 'application/octet-stream' },
           body: file,
         });
         await loadMaps();
