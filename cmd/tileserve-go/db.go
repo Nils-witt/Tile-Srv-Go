@@ -15,6 +15,8 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// NewStore opens a connection pool to the postgres database at dsn and
+// verifies it is reachable with a ping.
 func NewStore(ctx context.Context, dsn string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -27,10 +29,14 @@ func NewStore(ctx context.Context, dsn string) (*Store, error) {
 	return &Store{pool: pool}, nil
 }
 
+// Close releases the underlying database connection pool.
 func (s *Store) Close() {
 	s.pool.Close()
 }
 
+// Migrate creates the users, maps, map_versions, and map_permissions tables
+// if they don't exist yet, and adds any columns introduced since the tables
+// were first created. It is idempotent and safe to run on every startup.
 func (s *Store) Migrate(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS users (

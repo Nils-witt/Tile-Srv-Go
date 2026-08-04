@@ -19,6 +19,6 @@ func uiHandler() http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(uiPage)
+		_, _ = w.Write(uiPage)
 	}
 }

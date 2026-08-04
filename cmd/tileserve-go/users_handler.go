@@ -17,6 +17,7 @@ type userRequest struct {
 	IsAdmin   bool   `json:"isAdmin"`
 }
 
+// permissions extracts the global Permissions fields carried by a userRequest.
 func (req userRequest) permissions() Permissions {
 	return Permissions{
 		CanCreate: req.CanCreate,
@@ -31,6 +32,8 @@ func requireAdmin(w http.ResponseWriter, r *http.Request, store *Store) bool {
 	return requirePermission(w, r, store, func(p Permissions) bool { return p.IsAdmin })
 }
 
+// usersCollectionHandler serves the /users collection route (admin-only):
+// GET lists all users, POST creates a new one.
 func usersCollectionHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r, store) {
@@ -73,6 +76,9 @@ func usersCollectionHandler(store *Store) http.HandlerFunc {
 	}
 }
 
+// userItemHandler serves the /users/{username} item route (admin-only): PUT
+// updates the user's cn/permissions (and password, if given), DELETE removes
+// the user (an admin may not delete their own account).
 func userItemHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		username := strings.Trim(strings.TrimPrefix(r.URL.Path, "/users/"), "/")

@@ -39,11 +39,15 @@ type loginResponse struct {
 	Token string `json:"token"`
 }
 
+// loginHandler serves GET /login (the static login page) and handles
+// POST /login: it authenticates the given username/password against store
+// and, on success, issues a signed JWT valid for the requested TTL (capped
+// at maxTokenTTL, defaulting to defaultTokenTTL).
 func loginHandler(secret []byte, store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(loginPage)
+			_, _ = w.Write(loginPage)
 			return
 		}
 
@@ -83,7 +87,7 @@ func loginHandler(secret []byte, store *Store) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(loginResponse{Token: token})
+		_ = json.NewEncoder(w).Encode(loginResponse{Token: token})
 	}
 }
 
@@ -113,6 +117,9 @@ func parseBearerToken(secret []byte, r *http.Request) (username string, hadToken
 	return claims.Subject, true, true
 }
 
+// requireAuth is HTTP middleware that rejects any request without a valid
+// bearer token (401) and otherwise stores the token's subject (username) in
+// the request context for next to read via usernameFromContext.
 func requireAuth(secret []byte, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		username, hadToken, valid := parseBearerToken(secret, r)

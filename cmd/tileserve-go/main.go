@@ -8,6 +8,8 @@ import (
 	"os"
 )
 
+// envOrDefault returns the value of the environment variable key, or
+// fallback if it is unset or empty.
 func envOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -15,6 +17,9 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
+// main parses configuration (flags/env), connects to and migrates the
+// database, optionally seeds an initial user, then wires up and starts the
+// HTTP server. See the mux.Handle calls below for the route table.
 func main() {
 	dataRoot := flag.String("data-root", envOrDefault("DATA_ROOT", "./data"), "directory to serve files from (env DATA_ROOT)")
 	jwtSecret := flag.String("jwt-secret", envOrDefault("JWT_SECRET", "secretsecret"), "secret used to sign and verify JWTs (env JWT_SECRET)")
@@ -47,18 +52,29 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	// GET /healthz: liveness probe, always returns 200 "ok".
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
+	// GET /login: serves the login HTML page. POST /login: exchanges
+	// username/password for a JWT.
 	mux.HandleFunc("/login", loginHandler(secret, store))
+	// GET /ui/: serves the self-contained management UI (public, unauthenticated).
 	mux.HandleFunc("/ui/", uiHandler())
+	// GET /maps, POST /maps: list maps visible to the caller / create a map.
 	mux.Handle("/maps", requireAuth(secret, mapsCollectionHandler(store)))
+	// /maps/{id}, /maps/{id}/upload, /maps/{id}/versions,
+	// /maps/{id}/permissions[/{username}], /maps/{id}/version/{v}[/bounds|...]:
+	// see mapsItemHandler for the full per-route breakdown.
+	//
 	// optionalAuth, not requireAuth: a map's version file serving route may
 	// be reachable without a token at all if that map has anonymousAllowed
 	// set — mapsItemHandler enforces auth itself on every other route.
 	mux.Handle("/maps/", optionalAuth(secret, mapsItemHandler(store, *dataRoot)))
+	// GET /users, POST /users: list users / create a user (admin-only).
 	mux.Handle("/users", requireAuth(secret, usersCollectionHandler(store)))
+	// PUT /users/{username}, DELETE /users/{username}: update / delete a user (admin-only).
 	mux.Handle("/users/", requireAuth(secret, userItemHandler(store)))
 
 	addr := ":" + *port

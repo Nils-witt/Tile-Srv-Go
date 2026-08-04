@@ -26,6 +26,7 @@ type UserRecord struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// ListUsers returns every user, oldest first.
 func (s *Store) ListUsers(ctx context.Context) ([]UserRecord, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT username, cn, can_create, can_edit, can_delete, is_admin, created_at
@@ -119,6 +120,7 @@ func (s *Store) UpdateUser(ctx context.Context, username, cn string, perms Permi
 	return u, nil
 }
 
+// DeleteUser deletes username. It returns ErrUserNotFound if it doesn't exist.
 func (s *Store) DeleteUser(ctx context.Context, username string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM users WHERE username = $1`, username)
 	if err != nil {

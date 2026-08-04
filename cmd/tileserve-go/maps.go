@@ -25,6 +25,7 @@ type MapRecord struct {
 	UpdatedBy        string    `json:"updatedBy"`
 }
 
+// CreateMap inserts a new map row with a fresh UUID, owned by createdBy.
 func (s *Store) CreateMap(ctx context.Context, name, currentVersion string, visibleToAll, anonymousAllowed bool, createdBy string) (MapRecord, error) {
 	m := MapRecord{
 		UUID:             uuid.New(),
@@ -84,6 +85,7 @@ func (s *Store) ListMaps(ctx context.Context, username string, bypassVisibility 
 	return maps, nil
 }
 
+// GetMap fetches a single map by id. It returns ErrMapNotFound if it doesn't exist.
 func (s *Store) GetMap(ctx context.Context, id uuid.UUID) (MapRecord, error) {
 	var m MapRecord
 	err := s.pool.QueryRow(ctx, `
@@ -99,6 +101,8 @@ func (s *Store) GetMap(ctx context.Context, id uuid.UUID) (MapRecord, error) {
 	return m, nil
 }
 
+// UpdateMap overwrites a map's name, currentVersion, and visibility flags.
+// It returns ErrMapNotFound if id doesn't exist.
 func (s *Store) UpdateMap(ctx context.Context, id uuid.UUID, name, currentVersion string, visibleToAll, anonymousAllowed bool, updatedBy string) (MapRecord, error) {
 	var m MapRecord
 	err := s.pool.QueryRow(ctx, `
@@ -131,7 +135,7 @@ func (s *Store) IncrementMapVersion(ctx context.Context, id uuid.UUID, updatedBy
 	if err != nil {
 		return MapRecord{}, fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var exists bool
 	err = tx.QueryRow(ctx, `SELECT true FROM maps WHERE uuid = $1 FOR UPDATE`, id).Scan(&exists)
@@ -214,6 +218,8 @@ func (s *Store) ListMapVersions(ctx context.Context, id uuid.UUID) ([]MapVersion
 	return versions, nil
 }
 
+// DeleteMap deletes a map by id (cascading to its versions and permission
+// grants). It returns ErrMapNotFound if id doesn't exist.
 func (s *Store) DeleteMap(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM maps WHERE uuid = $1`, id)
 	if err != nil {

@@ -37,10 +37,11 @@ type mapRequest struct {
 	AnonymousAllowed bool   `json:"anonymousAllowed"`
 }
 
+// writeJSON writes v as a JSON response body with the given HTTP status code.
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // requireAuthenticated rejects a request with no bearer token. /maps/ is
@@ -161,6 +162,9 @@ func getViewableMap(w http.ResponseWriter, r *http.Request, store *Store, id uui
 	return m, true
 }
 
+// mapsCollectionHandler serves the /maps collection route: GET lists the
+// maps visible to the caller, POST creates a new map (requires the
+// can_create global permission).
 func mapsCollectionHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -208,6 +212,20 @@ func mapsCollectionHandler(store *Store) http.HandlerFunc {
 	}
 }
 
+// mapsItemHandler dispatches every route nested under /maps/{id}/... by
+// hand-parsing the path (the stdlib mux only matches the /maps/ prefix):
+//
+//   - /maps/{id}/version/{version}/...  (except .../bounds): serves the
+//     extracted tile files for that version. The only route reachable
+//     without a bearer token, when the map's anonymousAllowed is set.
+//   - /maps/{id}/upload           (POST):   uploadMapVersionHandler
+//   - /maps/{id}/versions         (GET):    mapVersionsHandler
+//   - /maps/{id}/permissions[/{username}]:  mapPermissionsCollectionHandler /
+//     mapPermissionItemHandler
+//   - /maps/{id}/version/{version}/bounds (GET): mapVersionBoundsHandler
+//   - /maps/{id}                  (GET/PUT/DELETE): fetch/update/delete the map itself
+//
+// Every route other than the version-file route requires a bearer token.
 func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/maps/"), "/")
@@ -225,7 +243,7 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 		// It's handled before the blanket auth gate below so an anonymous
 		// caller can reach it; every other route still requires a token.
 		isVersionFile := len(segments) >= 3 && segments[1] == "version" &&
-			!(len(segments) == 4 && segments[3] == "bounds")
+			(len(segments) != 4 || segments[3] != "bounds")
 		if isVersionFile {
 			m, err := store.GetMap(r.Context(), id)
 			switch {
@@ -604,8 +622,8 @@ func uploadMapVersionHandler(store *Store, dataRoot string, id uuid.UUID) http.H
 			http.Error(w, "failed to buffer upload", http.StatusInternalServerError)
 			return
 		}
-		defer os.Remove(tmpZip.Name())
-		defer tmpZip.Close()
+		defer func() { _ = os.Remove(tmpZip.Name()) }()
+		defer func() { _ = tmpZip.Close() }()
 
 		if _, err := io.Copy(tmpZip, r.Body); err != nil {
 			var maxBytesErr *http.MaxBytesError
@@ -634,7 +652,7 @@ func uploadMapVersionHandler(store *Store, dataRoot string, id uuid.UUID) http.H
 			http.Error(w, "failed to prepare extraction", http.StatusInternalServerError)
 			return
 		}
-		defer os.RemoveAll(stagingDir)
+		defer func() { _ = os.RemoveAll(stagingDir) }()
 
 		if err := extractZip(tmpZip.Name(), stagingDir); err != nil {
 			http.Error(w, "invalid zip file: "+err.Error(), http.StatusBadRequest)
@@ -671,7 +689,7 @@ func extractZip(zipPath, destDir string) error {
 	if err != nil {
 		return fmt.Errorf("open zip: %w", err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 
 	cleanDest := filepath.Clean(destDir)
 	for _, f := range zr.File {
@@ -737,21 +755,26 @@ func validateExtractedEntryName(name string) error {
 	return nil
 }
 
+// extractZipFile copies a single zip entry's contents to targetPath,
+// overwriting it if it already exists.
 func extractZipFile(f *zip.File, targetPath string) error {
 	rc, err := f.Open()
 	if err != nil {
 		return fmt.Errorf("open zip entry %s: %w", f.Name, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	out, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("create file %s: %w", targetPath, err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	if _, err := io.Copy(out, rc); err != nil {
 		return fmt.Errorf("write file %s: %w", targetPath, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close file %s: %w", targetPath, err)
 	}
 	return nil
 }
