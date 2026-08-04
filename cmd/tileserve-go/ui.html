@@ -159,6 +159,9 @@
             <div class="field">
               <label><input type="checkbox" id="create-visible"> Visible to all</label>
             </div>
+            <div class="field">
+              <label><input type="checkbox" id="create-anonymous"> Anonymous tile access</label>
+            </div>
             <button type="submit">Create</button>
           </form>
         </div>
@@ -171,6 +174,7 @@
                 <th>Name</th>
                 <th>Version</th>
                 <th class="checkbox-cell">Public</th>
+                <th class="checkbox-cell">Anonymous</th>
                 <th>Created</th>
                 <th>Updated</th>
                 <th>Actions</th>
@@ -180,7 +184,9 @@
           </table>
           <p id="empty" class="muted hidden">No maps yet.</p>
           <p class="muted">Maps are private by default — only admins, the creator, and users granted access under
-            "Permissions" can see them, unless "Public" is checked.</p>
+            "Permissions" can see them, unless "Public" is checked. "Anonymous" separately controls whether tile
+            files (<code>/maps/&lt;uuid&gt;/version/&lt;version&gt;/...</code>) can be fetched without signing in
+            at all, regardless of "Public".</p>
         </div>
       </div>
 
@@ -433,8 +439,17 @@
       visibleCb.type = 'checkbox';
       visibleCb.checked = m.visibleToAll;
       visibleCb.title = 'Visible to all users';
-      visibleCb.onchange = () => setMapVisibility(m, visibleCb.checked);
+      visibleCb.onchange = () => updateMapFlag(m, { visibleToAll: visibleCb.checked });
       visibleTd.appendChild(visibleCb);
+
+      const anonymousTd = document.createElement('td');
+      anonymousTd.className = 'checkbox-cell';
+      const anonymousCb = document.createElement('input');
+      anonymousCb.type = 'checkbox';
+      anonymousCb.checked = m.anonymousAllowed;
+      anonymousCb.title = 'Allow fetching tile files without signing in';
+      anonymousCb.onchange = () => updateMapFlag(m, { anonymousAllowed: anonymousCb.checked });
+      anonymousTd.appendChild(anonymousCb);
 
       const createdTd = document.createElement('td');
       createdTd.innerHTML = fmtDate(m.createdAt) + '<br><span class="muted">by ' + m.createdBy + '</span>';
@@ -493,7 +508,7 @@
       versionsDiv.className = 'versions hidden';
 
       actionsTd.append(actions, versionsDiv);
-      tr.append(nameTd, versionTd, visibleTd, createdTd, updatedTd, actionsTd);
+      tr.append(nameTd, versionTd, visibleTd, anonymousTd, createdTd, updatedTd, actionsTd);
       return tr;
     }
 
@@ -515,13 +530,13 @@
       }
     }
 
-    async function createMap(name, currentVersion, visibleToAll) {
+    async function createMap(name, currentVersion, visibleToAll, anonymousAllowed) {
       appError(null);
       try {
         await api('/maps', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, currentVersion, visibleToAll }),
+          body: JSON.stringify({ name, currentVersion, visibleToAll, anonymousAllowed }),
         });
         await loadMaps();
       } catch (err) {
@@ -529,13 +544,23 @@
       }
     }
 
-    async function setMapVisibility(m, visibleToAll) {
+    // Toggles a single boolean flag (visibleToAll/anonymousAllowed) on m via
+    // PUT, which replaces the whole map so the rest of its fields are sent
+    // unchanged. Reloads the list afterwards either way, so a failed toggle
+    // (e.g. 403) doesn't leave the checkbox showing a state the server
+    // rejected.
+    async function updateMapFlag(m, patch) {
       appError(null);
       try {
         await api('/maps/' + m.uuid, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: m.name, currentVersion: m.currentVersion, visibleToAll }),
+          body: JSON.stringify(Object.assign({
+            name: m.name,
+            currentVersion: m.currentVersion,
+            visibleToAll: m.visibleToAll,
+            anonymousAllowed: m.anonymousAllowed,
+          }, patch)),
         });
       } catch (err) {
         if (err.message !== 'unauthorized') appError(err.message);
@@ -553,7 +578,7 @@
         await api('/maps/' + m.uuid, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, currentVersion, visibleToAll: m.visibleToAll }),
+          body: JSON.stringify({ name, currentVersion, visibleToAll: m.visibleToAll, anonymousAllowed: m.anonymousAllowed }),
         });
         await loadMaps();
       } catch (err) {
@@ -964,7 +989,8 @@
       const name = document.getElementById('create-name').value;
       const currentVersion = document.getElementById('create-version').value;
       const visibleToAll = document.getElementById('create-visible').checked;
-      createMap(name, currentVersion, visibleToAll).then(() => {
+      const anonymousAllowed = document.getElementById('create-anonymous').checked;
+      createMap(name, currentVersion, visibleToAll, anonymousAllowed).then(() => {
         e.target.reset();
       });
     });

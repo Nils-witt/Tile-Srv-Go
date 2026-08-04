@@ -180,11 +180,12 @@ paths:
           $ref: "#/components/responses/NotFound"
     put:
       tags: [maps]
-      summary: Replace a map's name/currentVersion/visibleToAll
+      summary: Replace a map's name/currentVersion/visibleToAll/anonymousAllowed
       description: >
         Requires the acting user's `can_edit` permission (global or per-map).
-        `name`, `currentVersion`, and `visibleToAll` are replaced; this does
-        not touch the map_versions history or any extracted files on disk.
+        `name`, `currentVersion`, `visibleToAll`, and `anonymousAllowed` are
+        replaced; this does not touch the map_versions history or any
+        extracted files on disk.
       requestBody:
         required: true
         content:
@@ -547,10 +548,13 @@ paths:
     get:
       tags: [files]
       summary: Fetch an extracted tile file from a map version
+      security: []
       description: >-
-        Serves files straight out of `<data-root>/<id>/<version>/`. Requires
-        view access to this map (see `GET /maps`); no `can_*` action
-        permission is required.
+        Serves files straight out of `<data-root>/<id>/<version>/`. If the
+        map has `anonymousAllowed` set, this one endpoint may be called with
+        no bearer token at all; otherwise it requires view access to the map
+        (see `GET /maps`), same as every other read endpoint — no `can_*`
+        action permission is required either way.
       responses:
         "200":
           description: File contents
@@ -643,6 +647,14 @@ components:
         visibleToAll:
           type: boolean
           description: Whether every authenticated user can see this map. Defaults to false (private) if omitted.
+        anonymousAllowed:
+          type: boolean
+          description: >-
+            Whether GET /maps/{id}/version/{version}/* (raw tile files) may
+            be fetched with no bearer token at all. Independent of
+            `visibleToAll` — a map can be private to authenticated users yet
+            still serve tiles anonymously, or vice versa. Defaults to false
+            if omitted.
 
     Map:
       type: object
@@ -661,6 +673,11 @@ components:
             only admins, the creator, users whose global `can_edit`/`can_delete`
             already lets them act on any map, and users with a per-map grant
             can see it.
+        anonymousAllowed:
+          type: boolean
+          description: >-
+            Whether this map's tile files can be fetched with no bearer
+            token at all (see `GET /maps/{id}/version/{version}/{filePath}`).
         createdAt:
           type: string
           format: date-time

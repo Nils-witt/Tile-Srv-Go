@@ -14,30 +14,32 @@ import (
 var ErrMapNotFound = errors.New("map not found")
 
 type MapRecord struct {
-	UUID           uuid.UUID `json:"uuid"`
-	Name           string    `json:"name"`
-	CurrentVersion string    `json:"currentVersion"`
-	VisibleToAll   bool      `json:"visibleToAll"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
-	CreatedBy      string    `json:"createdBy"`
-	UpdatedBy      string    `json:"updatedBy"`
+	UUID             uuid.UUID `json:"uuid"`
+	Name             string    `json:"name"`
+	CurrentVersion   string    `json:"currentVersion"`
+	VisibleToAll     bool      `json:"visibleToAll"`
+	AnonymousAllowed bool      `json:"anonymousAllowed"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+	CreatedBy        string    `json:"createdBy"`
+	UpdatedBy        string    `json:"updatedBy"`
 }
 
-func (s *Store) CreateMap(ctx context.Context, name, currentVersion string, visibleToAll bool, createdBy string) (MapRecord, error) {
+func (s *Store) CreateMap(ctx context.Context, name, currentVersion string, visibleToAll, anonymousAllowed bool, createdBy string) (MapRecord, error) {
 	m := MapRecord{
-		UUID:           uuid.New(),
-		Name:           name,
-		CurrentVersion: currentVersion,
-		VisibleToAll:   visibleToAll,
-		CreatedBy:      createdBy,
-		UpdatedBy:      createdBy,
+		UUID:             uuid.New(),
+		Name:             name,
+		CurrentVersion:   currentVersion,
+		VisibleToAll:     visibleToAll,
+		AnonymousAllowed: anonymousAllowed,
+		CreatedBy:        createdBy,
+		UpdatedBy:        createdBy,
 	}
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO maps (uuid, name, current_version, visible_to_all, created_by, updated_by)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO maps (uuid, name, current_version, visible_to_all, anonymous_allowed, created_by, updated_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING created_at, updated_at
-	`, m.UUID, m.Name, m.CurrentVersion, m.VisibleToAll, m.CreatedBy, m.UpdatedBy).Scan(&m.CreatedAt, &m.UpdatedAt)
+	`, m.UUID, m.Name, m.CurrentVersion, m.VisibleToAll, m.AnonymousAllowed, m.CreatedBy, m.UpdatedBy).Scan(&m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return MapRecord{}, fmt.Errorf("create map: %w", err)
 	}
@@ -51,7 +53,7 @@ func (s *Store) CreateMap(ctx context.Context, name, currentVersion string, visi
 // the acting user's is_admin || can_edit || can_delete.
 func (s *Store) ListMaps(ctx context.Context, username string, bypassVisibility bool) ([]MapRecord, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT uuid, name, current_version, visible_to_all, created_at, updated_at, created_by, updated_by
+		SELECT uuid, name, current_version, visible_to_all, anonymous_allowed, created_at, updated_at, created_by, updated_by
 		FROM maps
 		WHERE $2
 		   OR visible_to_all
@@ -71,7 +73,7 @@ func (s *Store) ListMaps(ctx context.Context, username string, bypassVisibility 
 	maps := []MapRecord{}
 	for rows.Next() {
 		var m MapRecord
-		if err := rows.Scan(&m.UUID, &m.Name, &m.CurrentVersion, &m.VisibleToAll, &m.CreatedAt, &m.UpdatedAt, &m.CreatedBy, &m.UpdatedBy); err != nil {
+		if err := rows.Scan(&m.UUID, &m.Name, &m.CurrentVersion, &m.VisibleToAll, &m.AnonymousAllowed, &m.CreatedAt, &m.UpdatedAt, &m.CreatedBy, &m.UpdatedBy); err != nil {
 			return nil, fmt.Errorf("scan map: %w", err)
 		}
 		maps = append(maps, m)
@@ -85,9 +87,9 @@ func (s *Store) ListMaps(ctx context.Context, username string, bypassVisibility 
 func (s *Store) GetMap(ctx context.Context, id uuid.UUID) (MapRecord, error) {
 	var m MapRecord
 	err := s.pool.QueryRow(ctx, `
-		SELECT uuid, name, current_version, visible_to_all, created_at, updated_at, created_by, updated_by
+		SELECT uuid, name, current_version, visible_to_all, anonymous_allowed, created_at, updated_at, created_by, updated_by
 		FROM maps WHERE uuid = $1
-	`, id).Scan(&m.UUID, &m.Name, &m.CurrentVersion, &m.VisibleToAll, &m.CreatedAt, &m.UpdatedAt, &m.CreatedBy, &m.UpdatedBy)
+	`, id).Scan(&m.UUID, &m.Name, &m.CurrentVersion, &m.VisibleToAll, &m.AnonymousAllowed, &m.CreatedAt, &m.UpdatedAt, &m.CreatedBy, &m.UpdatedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return MapRecord{}, ErrMapNotFound
 	}
@@ -97,14 +99,14 @@ func (s *Store) GetMap(ctx context.Context, id uuid.UUID) (MapRecord, error) {
 	return m, nil
 }
 
-func (s *Store) UpdateMap(ctx context.Context, id uuid.UUID, name, currentVersion string, visibleToAll bool, updatedBy string) (MapRecord, error) {
+func (s *Store) UpdateMap(ctx context.Context, id uuid.UUID, name, currentVersion string, visibleToAll, anonymousAllowed bool, updatedBy string) (MapRecord, error) {
 	var m MapRecord
 	err := s.pool.QueryRow(ctx, `
 		UPDATE maps
-		SET name = $2, current_version = $3, visible_to_all = $4, updated_by = $5, updated_at = now()
+		SET name = $2, current_version = $3, visible_to_all = $4, anonymous_allowed = $5, updated_by = $6, updated_at = now()
 		WHERE uuid = $1
-		RETURNING uuid, name, current_version, visible_to_all, created_at, updated_at, created_by, updated_by
-	`, id, name, currentVersion, visibleToAll, updatedBy).Scan(&m.UUID, &m.Name, &m.CurrentVersion, &m.VisibleToAll, &m.CreatedAt, &m.UpdatedAt, &m.CreatedBy, &m.UpdatedBy)
+		RETURNING uuid, name, current_version, visible_to_all, anonymous_allowed, created_at, updated_at, created_by, updated_by
+	`, id, name, currentVersion, visibleToAll, anonymousAllowed, updatedBy).Scan(&m.UUID, &m.Name, &m.CurrentVersion, &m.VisibleToAll, &m.AnonymousAllowed, &m.CreatedAt, &m.UpdatedAt, &m.CreatedBy, &m.UpdatedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return MapRecord{}, ErrMapNotFound
 	}
@@ -155,8 +157,8 @@ func (s *Store) IncrementMapVersion(ctx context.Context, id uuid.UUID, updatedBy
 		UPDATE maps
 		SET current_version = $2, updated_by = $3, updated_at = now()
 		WHERE uuid = $1
-		RETURNING uuid, name, current_version, visible_to_all, created_at, updated_at, created_by, updated_by
-	`, id, nextVersion, updatedBy).Scan(&m.UUID, &m.Name, &m.CurrentVersion, &m.VisibleToAll, &m.CreatedAt, &m.UpdatedAt, &m.CreatedBy, &m.UpdatedBy)
+		RETURNING uuid, name, current_version, visible_to_all, anonymous_allowed, created_at, updated_at, created_by, updated_by
+	`, id, nextVersion, updatedBy).Scan(&m.UUID, &m.Name, &m.CurrentVersion, &m.VisibleToAll, &m.AnonymousAllowed, &m.CreatedAt, &m.UpdatedAt, &m.CreatedBy, &m.UpdatedBy)
 	if err != nil {
 		return MapRecord{}, fmt.Errorf("update map version: %w", err)
 	}

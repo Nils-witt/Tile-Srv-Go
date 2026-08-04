@@ -75,7 +75,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 
 	_, err = s.pool.Exec(ctx, `
-		ALTER TABLE maps ADD COLUMN IF NOT EXISTS visible_to_all BOOLEAN NOT NULL DEFAULT false;
+		ALTER TABLE maps ADD COLUMN IF NOT EXISTS visible_to_all     BOOLEAN NOT NULL DEFAULT false;
+		ALTER TABLE maps ADD COLUMN IF NOT EXISTS anonymous_allowed  BOOLEAN NOT NULL DEFAULT false;
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate maps visibility column: %w", err)

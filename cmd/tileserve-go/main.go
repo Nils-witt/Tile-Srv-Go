@@ -54,7 +54,10 @@ func main() {
 	mux.HandleFunc("/login", loginHandler(secret, store))
 	mux.HandleFunc("/ui/", uiHandler())
 	mux.Handle("/maps", requireAuth(secret, mapsCollectionHandler(store)))
-	mux.Handle("/maps/", requireAuth(secret, mapsItemHandler(store, *dataRoot)))
+	// optionalAuth, not requireAuth: a map's version file serving route may
+	// be reachable without a token at all if that map has anonymousAllowed
+	// set — mapsItemHandler enforces auth itself on every other route.
+	mux.Handle("/maps/", optionalAuth(secret, mapsItemHandler(store, *dataRoot)))
 	mux.Handle("/users", requireAuth(secret, usersCollectionHandler(store)))
 	mux.Handle("/users/", requireAuth(secret, userItemHandler(store)))
 

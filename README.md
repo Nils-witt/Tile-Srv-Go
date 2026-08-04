@@ -41,8 +41,8 @@ query parameter.
 
 ### Maps API
 
-Authenticated CRUD for a `maps` table (`uuid`, `name`, `currentVersion`, `visibleToAll`, `createdAt`, `updatedAt`,
-`createdBy`, `updatedBy`). `createdBy`/`updatedBy` are set from the JWT subject.
+Authenticated CRUD for a `maps` table (`uuid`, `name`, `currentVersion`, `visibleToAll`, `anonymousAllowed`,
+`createdAt`, `updatedAt`, `createdBy`, `updatedBy`). `createdBy`/`updatedBy` are set from the JWT subject.
 
 ```sh
 # create (private by default; add "visibleToAll":true to make it visible to every authenticated user)
@@ -77,10 +77,12 @@ curl localhost:8085/maps/<uuid>/version/<version>/bounds -H "Authorization: Bear
 ```
 
 `GET /maps/<uuid>/version/<version>/...` serves files straight out of `<data-root>/<uuid>/<version>/` (no `can_*`
-action permission required — same as the other read endpoints — but the acting user must still be able to *see*
-the map; see "Map visibility" below). `.../bounds` is computed on the fly by scanning that directory's `z/x/y.png`
-layout (no bounds are stored): it returns the lon/lat bounding box of the tiles at the lowest zoom level present,
-along with that level as `minZoom` and the highest level present as `maxZoom`.
+action permission required — same as the other read endpoints). It's also the one endpoint that can be called with
+**no bearer token at all** if the map has `anonymousAllowed: true` — see "Anonymous tile access" below; otherwise
+the acting user must still be able to *see* the map, same as everything else (see "Map visibility"). `.../bounds` is
+computed on the fly by scanning that directory's `z/x/y.png` layout (no bounds are stored): it returns the lon/lat
+bounding box of the tiles at the lowest zoom level present, along with that level as `minZoom` and the highest level
+present as `maxZoom`; unlike raw tile files, `.../bounds` always requires authentication and view access.
 
 Each `/upload` writes a row (`version`, `createdAt`, `createdBy`) to a separate `map_versions` table in the same
 transaction that bumps the map's `currentVersion`, giving a full history of every version ever uploaded. That
@@ -107,6 +109,24 @@ true: it's marked `visibleToAll`, the user created it, the user is an admin, the
 user holds a per-map `can_view`/`can_edit`/`can_delete` grant (see below). `GET /maps` only returns maps the acting
 user can see; `GET /maps/<uuid>`, `.../versions`, `.../version/<version>/...`, and `.../version/<version>/bounds`
 all return `403 Forbidden` for a map the acting user can't see.
+
+#### Anonymous tile access
+
+Independent of visibility, a map can opt in to letting `GET /maps/<uuid>/version/<version>/...` (raw tile files
+only — nothing else) be fetched with **no bearer token whatsoever**, via `anonymousAllowed: true`. This is for
+embedding a map's tiles directly in a public page/app without requiring viewers to hold a token. It's off by
+default and unrelated to `visibleToAll`: a map can be private (`visibleToAll: false`, invisible in `GET /maps` and
+its own `GET` to anyone without permission) while still serving tiles anonymously, or public in the UI while still
+requiring a token for its tiles.
+
+```sh
+# make a map's tiles fetchable anonymously
+curl -X PUT localhost:8085/maps/<uuid> -H "Authorization: Bearer <token>" \
+  -d '{"name":"world","currentVersion":"2","anonymousAllowed":true}'
+
+# now works with no Authorization header at all
+curl localhost:8085/maps/<uuid>/version/<version>/0/0/0.png
+```
 
 #### Per-map permissions
 

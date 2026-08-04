@@ -31,15 +31,29 @@ var (
 )
 
 type mapRequest struct {
-	Name           string `json:"name"`
-	CurrentVersion string `json:"currentVersion"`
-	VisibleToAll   bool   `json:"visibleToAll"`
+	Name             string `json:"name"`
+	CurrentVersion   string `json:"currentVersion"`
+	VisibleToAll     bool   `json:"visibleToAll"`
+	AnonymousAllowed bool   `json:"anonymousAllowed"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// requireAuthenticated rejects a request with no bearer token. /maps/ is
+// mounted behind optionalAuth (see main.go) so that a map's version file
+// serving route can allow anonymous requests when that map opts in via
+// anonymousAllowed; every other route under /maps/ calls this to restore
+// the usual "must be logged in" requirement.
+func requireAuthenticated(w http.ResponseWriter, r *http.Request) bool {
+	if usernameFromContext(r.Context()) == "" {
+		http.Error(w, "missing bearer token", http.StatusUnauthorized)
+		return false
+	}
+	return true
 }
 
 // requirePermission checks the acting user's global permissions and writes an
@@ -181,7 +195,7 @@ func mapsCollectionHandler(store *Store) http.HandlerFunc {
 				return
 			}
 
-			m, err := store.CreateMap(r.Context(), req.Name, req.CurrentVersion, req.VisibleToAll, usernameFromContext(r.Context()))
+			m, err := store.CreateMap(r.Context(), req.Name, req.CurrentVersion, req.VisibleToAll, req.AnonymousAllowed, usernameFromContext(r.Context()))
 			if err != nil {
 				http.Error(w, "failed to create map", http.StatusInternalServerError)
 				return
@@ -202,6 +216,40 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 		id, err := uuid.Parse(segments[0])
 		if err != nil {
 			http.Error(w, "invalid map id", http.StatusBadRequest)
+			return
+		}
+
+		// Version file serving (but not .../bounds, a distinct JSON
+		// endpoint) is the one route that may be reached without a bearer
+		// token at all, when the map itself opts in via anonymousAllowed.
+		// It's handled before the blanket auth gate below so an anonymous
+		// caller can reach it; every other route still requires a token.
+		isVersionFile := len(segments) >= 3 && segments[1] == "version" &&
+			!(len(segments) == 4 && segments[3] == "bounds")
+		if isVersionFile {
+			m, err := store.GetMap(r.Context(), id)
+			switch {
+			case errors.Is(err, ErrMapNotFound):
+				http.Error(w, "map not found", http.StatusNotFound)
+				return
+			case err != nil:
+				http.Error(w, "failed to get map", http.StatusInternalServerError)
+				return
+			}
+			if !m.AnonymousAllowed {
+				if !requireAuthenticated(w, r) || !requireMapView(w, r, store, m) {
+					return
+				}
+			}
+
+			version := segments[2]
+			versionDir := filepath.Join(dataRoot, id.String(), version)
+			prefix := "/maps/" + strings.Join(segments[:3], "/") + "/"
+			http.StripPrefix(prefix, http.FileServer(http.Dir(versionDir))).ServeHTTP(w, r)
+			return
+		}
+
+		if !requireAuthenticated(w, r) {
 			return
 		}
 
@@ -227,16 +275,6 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 			if _, ok := getViewableMap(w, r, store, id); ok {
 				mapVersionBoundsHandler(dataRoot, id, segments[2])(w, r)
 			}
-			return
-		}
-		if len(segments) >= 3 && segments[1] == "version" {
-			if _, ok := getViewableMap(w, r, store, id); !ok {
-				return
-			}
-			version := segments[2]
-			versionDir := filepath.Join(dataRoot, id.String(), version)
-			prefix := "/maps/" + strings.Join(segments[:3], "/") + "/"
-			http.StripPrefix(prefix, http.FileServer(http.Dir(versionDir))).ServeHTTP(w, r)
 			return
 		}
 		if len(segments) != 1 {
@@ -269,7 +307,7 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 				return
 			}
 
-			m, err := store.UpdateMap(r.Context(), id, req.Name, req.CurrentVersion, req.VisibleToAll, usernameFromContext(r.Context()))
+			m, err := store.UpdateMap(r.Context(), id, req.Name, req.CurrentVersion, req.VisibleToAll, req.AnonymousAllowed, usernameFromContext(r.Context()))
 			switch {
 			case errors.Is(err, ErrMapNotFound):
 				http.Error(w, "map not found", http.StatusNotFound)

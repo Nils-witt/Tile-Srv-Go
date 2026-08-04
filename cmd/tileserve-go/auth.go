@@ -87,30 +87,65 @@ func loginHandler(secret []byte, store *Store) http.HandlerFunc {
 	}
 }
 
+// parseBearerToken extracts and validates a JWT from the request's
+// Authorization header or ?token= query parameter. hadToken is false if the
+// request supplied no token at all (distinct from supplying an invalid one),
+// so callers can tell "anonymous" apart from "bad credentials".
+func parseBearerToken(secret []byte, r *http.Request) (username string, hadToken bool, valid bool) {
+	tokenString, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || tokenString == "" {
+		tokenString = r.URL.Query().Get("token")
+	}
+	if tokenString == "" {
+		return "", false, false
+	}
+
+	claims := &jwt.RegisteredClaims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrTokenSignatureInvalid
+		}
+		return secret, nil
+	})
+	if err != nil || !token.Valid {
+		return "", true, false
+	}
+	return claims.Subject, true, true
+}
+
 func requireAuth(secret []byte, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokenString, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || tokenString == "" {
-			tokenString = r.URL.Query().Get("token")
-		}
-		if tokenString == "" {
+		username, hadToken, valid := parseBearerToken(secret, r)
+		if !hadToken {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
 		}
-
-		claims := &jwt.RegisteredClaims{}
-		token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, jwt.ErrTokenSignatureInvalid
-			}
-			return secret, nil
-		})
-		if err != nil || !token.Valid {
+		if !valid {
 			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), usernameContextKey, claims.Subject)
+		ctx := context.WithValue(r.Context(), usernameContextKey, username)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// optionalAuth is like requireAuth but lets a request with no bearer token
+// at all through, with an empty username in the context (see
+// usernameFromContext) rather than rejecting it outright. It's for routes
+// that decide per-resource whether anonymous access is allowed (e.g. a
+// map's anonymousAllowed setting) — everything else on such a route must
+// still call requireAuthenticated itself. A token that IS present but
+// invalid/expired is still rejected with 401, same as requireAuth.
+func optionalAuth(secret []byte, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, hadToken, valid := parseBearerToken(secret, r)
+		if hadToken && !valid {
+			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), usernameContextKey, username)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
