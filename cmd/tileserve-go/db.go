@@ -53,6 +53,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS can_edit   BOOLEAN NOT NULL DEFAULT true;
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS can_delete BOOLEAN NOT NULL DEFAULT true;
 		ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin   BOOLEAN NOT NULL DEFAULT true;
+		ALTER TABLE users ADD COLUMN IF NOT EXISTS cn         TEXT NOT NULL DEFAULT '';
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate users permission columns: %w", err)

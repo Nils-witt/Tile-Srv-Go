@@ -10,6 +10,7 @@ import (
 type userRequest struct {
 	Username  string `json:"username"`
 	Password  string `json:"password"`
+	CN        string `json:"cn"`
 	CanCreate bool   `json:"canCreate"`
 	CanEdit   bool   `json:"canEdit"`
 	CanDelete bool   `json:"canDelete"`
@@ -56,7 +57,7 @@ func usersCollectionHandler(store *Store) http.HandlerFunc {
 				return
 			}
 
-			u, err := store.CreateUser(r.Context(), req.Username, req.Password, req.permissions())
+			u, err := store.CreateUser(r.Context(), req.Username, req.Password, req.CN, req.permissions())
 			switch {
 			case errors.Is(err, ErrUserExists):
 				http.Error(w, "user already exists", http.StatusConflict)
@@ -92,7 +93,7 @@ func userItemHandler(store *Store) http.HandlerFunc {
 				return
 			}
 
-			u, err := store.UpdateUser(r.Context(), username, req.permissions(), req.Password)
+			u, err := store.UpdateUser(r.Context(), username, req.CN, req.permissions(), req.Password)
 			switch {
 			case errors.Is(err, ErrUserNotFound):
 				http.Error(w, "user not found", http.StatusNotFound)

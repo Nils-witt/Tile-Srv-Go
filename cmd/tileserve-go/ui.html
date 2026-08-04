@@ -68,6 +68,13 @@
   .checkbox-cell { text-align: center; }
   input[type=checkbox] { width: auto; padding: 0; }
   input[type=password].inline { width: 10rem; }
+  footer {
+    text-align: center;
+    font-size: 0.75rem;
+    opacity: 0.7;
+    padding: 1.5rem 0 0.5rem;
+  }
+  footer a { color: inherit; }
 </style>
 </head>
 <body>
@@ -145,6 +152,10 @@
               <input id="cu-username" required>
             </div>
             <div class="field">
+              <label for="cu-cn">Certificate DN</label>
+              <input id="cu-cn">
+            </div>
+            <div class="field">
               <label for="cu-password">Password</label>
               <input id="cu-password" type="password" required>
             </div>
@@ -170,6 +181,7 @@
             <thead>
               <tr>
                 <th>Username</th>
+                <th>Full name</th>
                 <th class="checkbox-cell">Create</th>
                 <th class="checkbox-cell">Edit</th>
                 <th class="checkbox-cell">Delete</th>
@@ -184,6 +196,10 @@
         </div>
       </div>
     </div>
+
+    <footer>
+      &copy; 2026 Witt, Nils &middot; tileserve-go &middot; <a href="https://github.com/Nils-witt/Tile-Srv-Go" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </footer>
   </div>
 
   <script>
@@ -465,6 +481,10 @@
       const usernameTd = document.createElement('td');
       usernameTd.textContent = u.username + (self ? ' (you)' : '');
 
+      const cnInput = document.createElement('input');
+      cnInput.className = 'inline';
+      cnInput.value = u.cn || '';
+
       const createCb = document.createElement('input');
       createCb.type = 'checkbox';
       createCb.checked = u.canCreate;
@@ -490,6 +510,7 @@
       saveBtn.className = 'secondary';
       saveBtn.textContent = 'Save';
       saveBtn.onclick = () => updateUser(u.username, {
+        cn: cnInput.value,
         canCreate: createCb.checked,
         canEdit: editCb.checked,
         canDelete: deleteCb.checked,
@@ -513,6 +534,9 @@
       const passwordTd = document.createElement('td');
       passwordTd.appendChild(passwordInput);
 
+      const cnTd = document.createElement('td');
+      cnTd.appendChild(cnInput);
+
       const createTd = document.createElement('td');
       createTd.className = 'checkbox-cell';
       createTd.appendChild(createCb);
@@ -526,7 +550,7 @@
       adminTd.className = 'checkbox-cell';
       adminTd.appendChild(adminCb);
 
-      tr.append(usernameTd, createTd, editTd, deleteTd, adminTd, passwordTd, createdTd, actionsTd);
+      tr.append(usernameTd, cnTd, createTd, editTd, deleteTd, adminTd, passwordTd, createdTd, actionsTd);
       return tr;
     }
 
@@ -618,6 +642,7 @@
       e.preventDefault();
       const payload = {
         username: document.getElementById('cu-username').value,
+        cn: document.getElementById('cu-cn').value,
         password: document.getElementById('cu-password').value,
         canCreate: document.getElementById('cu-create').checked,
         canEdit: document.getElementById('cu-edit').checked,

@@ -18,6 +18,7 @@ var (
 
 type UserRecord struct {
 	Username  string    `json:"username"`
+	CN        string    `json:"cn"`
 	CanCreate bool      `json:"canCreate"`
 	CanEdit   bool      `json:"canEdit"`
 	CanDelete bool      `json:"canDelete"`
@@ -27,7 +28,7 @@ type UserRecord struct {
 
 func (s *Store) ListUsers(ctx context.Context) ([]UserRecord, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT username, can_create, can_edit, can_delete, is_admin, created_at
+		SELECT username, cn, can_create, can_edit, can_delete, is_admin, created_at
 		FROM users
 		ORDER BY created_at ASC
 	`)
@@ -39,7 +40,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserRecord, error) {
 	users := []UserRecord{}
 	for rows.Next() {
 		var u UserRecord
-		if err := rows.Scan(&u.Username, &u.CanCreate, &u.CanEdit, &u.CanDelete, &u.IsAdmin, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.Username, &u.CN, &u.CanCreate, &u.CanEdit, &u.CanDelete, &u.IsAdmin, &u.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		users = append(users, u)
@@ -52,7 +53,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserRecord, error) {
 
 // CreateUser creates a new user. It returns ErrUserExists if username is
 // already taken.
-func (s *Store) CreateUser(ctx context.Context, username, password string, perms Permissions) (UserRecord, error) {
+func (s *Store) CreateUser(ctx context.Context, username, password, cn string, perms Permissions) (UserRecord, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return UserRecord{}, fmt.Errorf("hash password: %w", err)
@@ -60,16 +61,17 @@ func (s *Store) CreateUser(ctx context.Context, username, password string, perms
 
 	u := UserRecord{
 		Username:  username,
+		CN:        cn,
 		CanCreate: perms.CanCreate,
 		CanEdit:   perms.CanEdit,
 		CanDelete: perms.CanDelete,
 		IsAdmin:   perms.IsAdmin,
 	}
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO users (username, password_hash, can_create, can_edit, can_delete, is_admin)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO users (username, password_hash, cn, can_create, can_edit, can_delete, is_admin)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING created_at
-	`, username, string(hash), u.CanCreate, u.CanEdit, u.CanDelete, u.IsAdmin).Scan(&u.CreatedAt)
+	`, username, string(hash), u.CN, u.CanCreate, u.CanEdit, u.CanDelete, u.IsAdmin).Scan(&u.CreatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -80,9 +82,10 @@ func (s *Store) CreateUser(ctx context.Context, username, password string, perms
 	return u, nil
 }
 
-// UpdateUser sets username's permissions, and its password too if newPassword
-// is non-empty. It returns ErrUserNotFound if username doesn't exist.
-func (s *Store) UpdateUser(ctx context.Context, username string, perms Permissions, newPassword string) (UserRecord, error) {
+// UpdateUser sets username's cn and permissions, and its password too if
+// newPassword is non-empty. It returns ErrUserNotFound if username doesn't
+// exist.
+func (s *Store) UpdateUser(ctx context.Context, username, cn string, perms Permissions, newPassword string) (UserRecord, error) {
 	var u UserRecord
 	var err error
 	if newPassword != "" {
@@ -93,19 +96,19 @@ func (s *Store) UpdateUser(ctx context.Context, username string, perms Permissio
 		}
 		err = s.pool.QueryRow(ctx, `
 			UPDATE users
-			SET can_create = $2, can_edit = $3, can_delete = $4, is_admin = $5, password_hash = $6
+			SET cn = $2, can_create = $3, can_edit = $4, can_delete = $5, is_admin = $6, password_hash = $7
 			WHERE username = $1
-			RETURNING username, can_create, can_edit, can_delete, is_admin, created_at
-		`, username, perms.CanCreate, perms.CanEdit, perms.CanDelete, perms.IsAdmin, string(hash)).
-			Scan(&u.Username, &u.CanCreate, &u.CanEdit, &u.CanDelete, &u.IsAdmin, &u.CreatedAt)
+			RETURNING username, cn, can_create, can_edit, can_delete, is_admin, created_at
+		`, username, cn, perms.CanCreate, perms.CanEdit, perms.CanDelete, perms.IsAdmin, string(hash)).
+			Scan(&u.Username, &u.CN, &u.CanCreate, &u.CanEdit, &u.CanDelete, &u.IsAdmin, &u.CreatedAt)
 	} else {
 		err = s.pool.QueryRow(ctx, `
 			UPDATE users
-			SET can_create = $2, can_edit = $3, can_delete = $4, is_admin = $5
+			SET cn = $2, can_create = $3, can_edit = $4, can_delete = $5, is_admin = $6
 			WHERE username = $1
-			RETURNING username, can_create, can_edit, can_delete, is_admin, created_at
-		`, username, perms.CanCreate, perms.CanEdit, perms.CanDelete, perms.IsAdmin).
-			Scan(&u.Username, &u.CanCreate, &u.CanEdit, &u.CanDelete, &u.IsAdmin, &u.CreatedAt)
+			RETURNING username, cn, can_create, can_edit, can_delete, is_admin, created_at
+		`, username, cn, perms.CanCreate, perms.CanEdit, perms.CanDelete, perms.IsAdmin).
+			Scan(&u.Username, &u.CN, &u.CanCreate, &u.CanEdit, &u.CanDelete, &u.IsAdmin, &u.CreatedAt)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserRecord{}, ErrUserNotFound

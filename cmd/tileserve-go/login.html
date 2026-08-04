@@ -53,6 +53,16 @@
   #error { color: #dc2626; font-size: 0.85rem; margin-top: 0.75rem; }
   #copy { margin-top: 0.5rem; background: #444; }
   .hidden { display: none; }
+  footer {
+    position: fixed;
+    bottom: 0.75rem;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 0.75rem;
+    opacity: 0.7;
+  }
+  footer a { color: inherit; }
 </style>
 </head>
 <body>
@@ -74,6 +84,9 @@
       <button id="copy" type="button">Copy to clipboard</button>
     </div>
   </div>
+  <footer>
+    &copy; 2026 Witt, Nils &middot; tileserve-go &middot; <a href="https://github.com/Nils-witt/Tile-Srv-Go" target="_blank" rel="noopener noreferrer">GitHub</a>
+  </footer>
   <script>
     const form = document.getElementById('login-form');
     const submit = document.getElementById('submit');
