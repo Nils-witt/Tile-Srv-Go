@@ -41,20 +41,20 @@ query parameter.
 
 ### Maps API
 
-Authenticated CRUD for a `maps` table (`uuid`, `name`, `currentVersion`, `createdAt`, `updatedAt`, `createdBy`,
-`updatedBy`). `createdBy`/`updatedBy` are set from the JWT subject.
+Authenticated CRUD for a `maps` table (`uuid`, `name`, `currentVersion`, `visibleToAll`, `createdAt`, `updatedAt`,
+`createdBy`, `updatedBy`). `createdBy`/`updatedBy` are set from the JWT subject.
 
 ```sh
-# create
+# create (private by default; add "visibleToAll":true to make it visible to every authenticated user)
 curl -X POST localhost:8085/maps -H "Authorization: Bearer <token>" -d '{"name":"world","currentVersion":"1"}'
 
-# list
+# list (only maps the acting user can see — see "Map visibility" below)
 curl localhost:8085/maps -H "Authorization: Bearer <token>"
 
 # get one
 curl localhost:8085/maps/<uuid> -H "Authorization: Bearer <token>"
 
-# update (replaces name/currentVersion)
+# update (replaces name/currentVersion/visibleToAll)
 curl -X PUT localhost:8085/maps/<uuid> -H "Authorization: Bearer <token>" -d '{"name":"world","currentVersion":"2"}'
 
 # delete
@@ -76,11 +76,11 @@ curl localhost:8085/maps/<uuid>/version/<version>/0/0/0.png -H "Authorization: B
 curl localhost:8085/maps/<uuid>/version/<version>/bounds -H "Authorization: Bearer <token>"
 ```
 
-`GET /maps/<uuid>/version/<version>/...` serves files straight out of `<data-root>/<uuid>/<version>/` (any
-authenticated user, no `can_*` permission required — same as the other read endpoints). `.../bounds` is computed
-on the fly by scanning that directory's `z/x/y.png` layout (no bounds are stored): it returns the lon/lat bounding
-box of the tiles at the lowest zoom level present, along with that level as `minZoom` and the highest level present
-as `maxZoom`.
+`GET /maps/<uuid>/version/<version>/...` serves files straight out of `<data-root>/<uuid>/<version>/` (no `can_*`
+action permission required — same as the other read endpoints — but the acting user must still be able to *see*
+the map; see "Map visibility" below). `.../bounds` is computed on the fly by scanning that directory's `z/x/y.png`
+layout (no bounds are stored): it returns the lon/lat bounding box of the tiles at the lowest zoom level present,
+along with that level as `minZoom` and the highest level present as `maxZoom`.
 
 Each `/upload` writes a row (`version`, `createdAt`, `createdBy`) to a separate `map_versions` table in the same
 transaction that bumps the map's `currentVersion`, giving a full history of every version ever uploaded. That
@@ -96,24 +96,33 @@ skipped (and logged server-side) rather than failing the whole upload; everythin
 extracted and the version is still created (even if it ends up empty).
 
 Every user has four global permission flags — `can_create`, `can_edit`, `can_delete`, and `is_admin` — checked on
-the corresponding requests (map list/get are unrestricted for any authenticated user; `is_admin` gates the Users
-API below). Seeded/new users default to all four `true`.
+the corresponding requests (`is_admin` also gates the Users API below). Seeded/new users default to all four
+`true`.
+
+#### Map visibility
+
+Maps are **private by default** (`visibleToAll: false`). A map is visible to a user if any of the following is
+true: it's marked `visibleToAll`, the user created it, the user is an admin, the user's global `can_edit` or
+`can_delete` permission already lets them act on every map (so hiding one from view would be inconsistent), or the
+user holds a per-map `can_view`/`can_edit`/`can_delete` grant (see below). `GET /maps` only returns maps the acting
+user can see; `GET /maps/<uuid>`, `.../versions`, `.../version/<version>/...`, and `.../version/<version>/bounds`
+all return `403 Forbidden` for a map the acting user can't see.
 
 #### Per-map permissions
 
-On top of the global flags, admins can grant a specific user `can_edit`/`can_delete` on a single map, without
-giving them the matching global permission (which would apply to every map). A per-map grant only ever adds
-capability — a user who already has the global flag doesn't need one, and a grant can't take capability away from
-someone who does. `PUT`/`DELETE /maps/<uuid>` and `POST /maps/<uuid>/upload` all accept either the global flag or a
-matching per-map grant.
+On top of the global flags, admins can grant a specific user `can_view`/`can_edit`/`can_delete` on a single map,
+without giving them the matching global permission (which would apply to every map). A per-map grant only ever
+adds capability — a user who already has the global flag doesn't need one, and a grant can't take capability away
+from someone who does. `PUT`/`DELETE /maps/<uuid>` and `POST /maps/<uuid>/upload` all accept either the global flag
+or a matching per-map grant; an edit or delete grant also implies view access.
 
 ```sh
 # list a map's per-user grants
 curl localhost:8085/maps/<uuid>/permissions -H "Authorization: Bearer <token>"
 
-# grant (or replace) alice's edit access to just this map
+# grant (or replace) alice's view+edit access to just this map
 curl -X PUT localhost:8085/maps/<uuid>/permissions/alice -H "Authorization: Bearer <token>" \
-  -d '{"canEdit":true,"canDelete":false}'
+  -d '{"canView":true,"canEdit":true,"canDelete":false}'
 
 # revoke it
 curl -X DELETE localhost:8085/maps/<uuid>/permissions/alice -H "Authorization: Bearer <token>"

@@ -156,6 +156,9 @@
               <label for="create-version">Current version (optional)</label>
               <input id="create-version">
             </div>
+            <div class="field">
+              <label><input type="checkbox" id="create-visible"> Visible to all</label>
+            </div>
             <button type="submit">Create</button>
           </form>
         </div>
@@ -167,6 +170,7 @@
               <tr>
                 <th>Name</th>
                 <th>Version</th>
+                <th class="checkbox-cell">Public</th>
                 <th>Created</th>
                 <th>Updated</th>
                 <th>Actions</th>
@@ -175,6 +179,8 @@
             <tbody id="maps-body"></tbody>
           </table>
           <p id="empty" class="muted hidden">No maps yet.</p>
+          <p class="muted">Maps are private by default — only admins, the creator, and users granted access under
+            "Permissions" can see them, unless "Public" is checked.</p>
         </div>
       </div>
 
@@ -259,6 +265,7 @@
           <thead>
             <tr>
               <th>User</th>
+              <th class="checkbox-cell">View</th>
               <th class="checkbox-cell">Edit</th>
               <th class="checkbox-cell">Delete</th>
               <th>Actions</th>
@@ -273,7 +280,10 @@
             <select id="perm-add-user"></select>
           </div>
           <div class="field">
-            <label><input type="checkbox" id="perm-add-edit" checked> Can edit</label>
+            <label><input type="checkbox" id="perm-add-view" checked> Can view</label>
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="perm-add-edit"> Can edit</label>
           </div>
           <div class="field">
             <label><input type="checkbox" id="perm-add-delete"> Can delete</label>
@@ -417,6 +427,15 @@
       const versionTd = document.createElement('td');
       versionTd.textContent = m.currentVersion || '-';
 
+      const visibleTd = document.createElement('td');
+      visibleTd.className = 'checkbox-cell';
+      const visibleCb = document.createElement('input');
+      visibleCb.type = 'checkbox';
+      visibleCb.checked = m.visibleToAll;
+      visibleCb.title = 'Visible to all users';
+      visibleCb.onchange = () => setMapVisibility(m, visibleCb.checked);
+      visibleTd.appendChild(visibleCb);
+
       const createdTd = document.createElement('td');
       createdTd.innerHTML = fmtDate(m.createdAt) + '<br><span class="muted">by ' + m.createdBy + '</span>';
 
@@ -474,7 +493,7 @@
       versionsDiv.className = 'versions hidden';
 
       actionsTd.append(actions, versionsDiv);
-      tr.append(nameTd, versionTd, createdTd, updatedTd, actionsTd);
+      tr.append(nameTd, versionTd, visibleTd, createdTd, updatedTd, actionsTd);
       return tr;
     }
 
@@ -496,18 +515,32 @@
       }
     }
 
-    async function createMap(name, currentVersion) {
+    async function createMap(name, currentVersion, visibleToAll) {
       appError(null);
       try {
         await api('/maps', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, currentVersion }),
+          body: JSON.stringify({ name, currentVersion, visibleToAll }),
         });
         await loadMaps();
       } catch (err) {
         if (err.message !== 'unauthorized') appError(err.message);
       }
+    }
+
+    async function setMapVisibility(m, visibleToAll) {
+      appError(null);
+      try {
+        await api('/maps/' + m.uuid, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: m.name, currentVersion: m.currentVersion, visibleToAll }),
+        });
+      } catch (err) {
+        if (err.message !== 'unauthorized') appError(err.message);
+      }
+      await loadMaps();
     }
 
     async function editMap(m) {
@@ -520,7 +553,7 @@
         await api('/maps/' + m.uuid, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, currentVersion }),
+          body: JSON.stringify({ name, currentVersion, visibleToAll: m.visibleToAll }),
         });
         await loadMaps();
       } catch (err) {
@@ -606,6 +639,7 @@
     const permErrorEl = document.getElementById('perm-error');
     const permClose = document.getElementById('perm-close');
     const permAddUser = document.getElementById('perm-add-user');
+    const permAddView = document.getElementById('perm-add-view');
     const permAddEdit = document.getElementById('perm-add-edit');
     const permAddDelete = document.getElementById('perm-add-delete');
     const permAddBtn = document.getElementById('perm-add-btn');
@@ -658,6 +692,9 @@
       const userTd = document.createElement('td');
       userTd.textContent = g.username;
 
+      const viewCb = document.createElement('input');
+      viewCb.type = 'checkbox';
+      viewCb.checked = g.canView;
       const editCb = document.createElement('input');
       editCb.type = 'checkbox';
       editCb.checked = g.canEdit;
@@ -668,7 +705,7 @@
       const saveBtn = document.createElement('button');
       saveBtn.className = 'secondary';
       saveBtn.textContent = 'Save';
-      saveBtn.onclick = () => grantMapPermission(g.username, editCb.checked, deleteCb.checked);
+      saveBtn.onclick = () => grantMapPermission(g.username, viewCb.checked, editCb.checked, deleteCb.checked);
 
       const revokeBtn = document.createElement('button');
       revokeBtn.className = 'danger';
@@ -681,6 +718,9 @@
       actions.append(saveBtn, revokeBtn);
       actionsTd.append(actions);
 
+      const viewTd = document.createElement('td');
+      viewTd.className = 'checkbox-cell';
+      viewTd.appendChild(viewCb);
       const editTd = document.createElement('td');
       editTd.className = 'checkbox-cell';
       editTd.appendChild(editCb);
@@ -688,17 +728,17 @@
       deleteTd.className = 'checkbox-cell';
       deleteTd.appendChild(deleteCb);
 
-      tr.append(userTd, editTd, deleteTd, actionsTd);
+      tr.append(userTd, viewTd, editTd, deleteTd, actionsTd);
       return tr;
     }
 
-    async function grantMapPermission(username, canEdit, canDelete) {
+    async function grantMapPermission(username, canView, canEdit, canDelete) {
       permError(null);
       try {
         await api('/maps/' + permMapId + '/permissions/' + encodeURIComponent(username), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ canEdit, canDelete }),
+          body: JSON.stringify({ canView, canEdit, canDelete }),
         });
         await loadMapPermissions();
       } catch (err) {
@@ -722,7 +762,7 @@
     });
     permAddBtn.addEventListener('click', () => {
       if (!permAddUser.value) return;
-      grantMapPermission(permAddUser.value, permAddEdit.checked, permAddDelete.checked);
+      grantMapPermission(permAddUser.value, permAddView.checked, permAddEdit.checked, permAddDelete.checked);
     });
 
     async function uploadVersion(id, file) {
@@ -923,7 +963,8 @@
       e.preventDefault();
       const name = document.getElementById('create-name').value;
       const currentVersion = document.getElementById('create-version').value;
-      createMap(name, currentVersion).then(() => {
+      const visibleToAll = document.getElementById('create-visible').checked;
+      createMap(name, currentVersion, visibleToAll).then(() => {
         e.target.reset();
       });
     });

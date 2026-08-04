@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,7 @@ var (
 type mapRequest struct {
 	Name           string `json:"name"`
 	CurrentVersion string `json:"currentVersion"`
+	VisibleToAll   bool   `json:"visibleToAll"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -84,11 +86,80 @@ func requireMapPermission(w http.ResponseWriter, r *http.Request, store *Store, 
 	return true
 }
 
+// canViewMap reports whether username may see m. Maps are private by
+// default: a user can see one because it's marked visible to everyone,
+// because they created it, because they're an admin or already hold a
+// global permission letting them modify any map (can_edit/can_delete —
+// hiding a map from someone who can already act on it would be
+// nonsensical), or because they hold a per-map grant (view, edit, or
+// delete — any of the three implies visibility).
+func canViewMap(ctx context.Context, store *Store, m MapRecord, username string) (bool, error) {
+	if m.VisibleToAll || m.CreatedBy == username {
+		return true, nil
+	}
+
+	perms, err := store.GetPermissions(ctx, username)
+	if err != nil {
+		return false, err
+	}
+	if perms.IsAdmin || perms.CanEdit || perms.CanDelete {
+		return true, nil
+	}
+
+	mp, err := store.GetMapPermission(ctx, m.UUID, username)
+	if err != nil {
+		return false, err
+	}
+	return mp.CanView || mp.CanEdit || mp.CanDelete, nil
+}
+
+// requireMapView checks canViewMap and writes a 403 if it fails. It returns
+// true when the caller may continue.
+func requireMapView(w http.ResponseWriter, r *http.Request, store *Store, m MapRecord) bool {
+	ok, err := canViewMap(r.Context(), store, m, usernameFromContext(r.Context()))
+	if err != nil {
+		http.Error(w, "failed to check permissions", http.StatusInternalServerError)
+		return false
+	}
+	if !ok {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+// getViewableMap fetches id and checks the acting user may view it, writing
+// the appropriate error response (404/403/500) if not. ok is false when the
+// caller should stop.
+func getViewableMap(w http.ResponseWriter, r *http.Request, store *Store, id uuid.UUID) (m MapRecord, ok bool) {
+	m, err := store.GetMap(r.Context(), id)
+	switch {
+	case errors.Is(err, ErrMapNotFound):
+		http.Error(w, "map not found", http.StatusNotFound)
+		return MapRecord{}, false
+	case err != nil:
+		http.Error(w, "failed to get map", http.StatusInternalServerError)
+		return MapRecord{}, false
+	}
+	if !requireMapView(w, r, store, m) {
+		return MapRecord{}, false
+	}
+	return m, true
+}
+
 func mapsCollectionHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			maps, err := store.ListMaps(r.Context())
+			username := usernameFromContext(r.Context())
+			perms, err := store.GetPermissions(r.Context(), username)
+			if err != nil {
+				http.Error(w, "failed to check permissions", http.StatusInternalServerError)
+				return
+			}
+			bypassVisibility := perms.IsAdmin || perms.CanEdit || perms.CanDelete
+
+			maps, err := store.ListMaps(r.Context(), username, bypassVisibility)
 			if err != nil {
 				http.Error(w, "failed to list maps", http.StatusInternalServerError)
 				return
@@ -110,7 +181,7 @@ func mapsCollectionHandler(store *Store) http.HandlerFunc {
 				return
 			}
 
-			m, err := store.CreateMap(r.Context(), req.Name, req.CurrentVersion, usernameFromContext(r.Context()))
+			m, err := store.CreateMap(r.Context(), req.Name, req.CurrentVersion, req.VisibleToAll, usernameFromContext(r.Context()))
 			if err != nil {
 				http.Error(w, "failed to create map", http.StatusInternalServerError)
 				return
@@ -139,7 +210,9 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 			return
 		}
 		if len(segments) == 2 && segments[1] == "versions" {
-			mapVersionsHandler(store, id)(w, r)
+			if _, ok := getViewableMap(w, r, store, id); ok {
+				mapVersionsHandler(store, id)(w, r)
+			}
 			return
 		}
 		if len(segments) == 2 && segments[1] == "permissions" {
@@ -151,10 +224,15 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 			return
 		}
 		if len(segments) == 4 && segments[1] == "version" && segments[3] == "bounds" {
-			mapVersionBoundsHandler(dataRoot, id, segments[2])(w, r)
+			if _, ok := getViewableMap(w, r, store, id); ok {
+				mapVersionBoundsHandler(dataRoot, id, segments[2])(w, r)
+			}
 			return
 		}
 		if len(segments) >= 3 && segments[1] == "version" {
+			if _, ok := getViewableMap(w, r, store, id); !ok {
+				return
+			}
 			version := segments[2]
 			versionDir := filepath.Join(dataRoot, id.String(), version)
 			prefix := "/maps/" + strings.Join(segments[:3], "/") + "/"
@@ -168,13 +246,8 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			m, err := store.GetMap(r.Context(), id)
-			switch {
-			case errors.Is(err, ErrMapNotFound):
-				http.Error(w, "map not found", http.StatusNotFound)
-			case err != nil:
-				http.Error(w, "failed to get map", http.StatusInternalServerError)
-			default:
+			m, ok := getViewableMap(w, r, store, id)
+			if ok {
 				writeJSON(w, http.StatusOK, m)
 			}
 
@@ -196,7 +269,7 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 				return
 			}
 
-			m, err := store.UpdateMap(r.Context(), id, req.Name, req.CurrentVersion, usernameFromContext(r.Context()))
+			m, err := store.UpdateMap(r.Context(), id, req.Name, req.CurrentVersion, req.VisibleToAll, usernameFromContext(r.Context()))
 			switch {
 			case errors.Is(err, ErrMapNotFound):
 				http.Error(w, "map not found", http.StatusNotFound)
@@ -251,6 +324,7 @@ func mapVersionsHandler(store *Store, id uuid.UUID) http.HandlerFunc {
 }
 
 type mapPermissionRequest struct {
+	CanView   bool `json:"canView"`
 	CanEdit   bool `json:"canEdit"`
 	CanDelete bool `json:"canDelete"`
 }
@@ -293,7 +367,7 @@ func mapPermissionItemHandler(store *Store, id uuid.UUID, username string) http.
 				return
 			}
 
-			p, err := store.SetMapPermission(r.Context(), id, username, req.CanEdit, req.CanDelete, usernameFromContext(r.Context()))
+			p, err := store.SetMapPermission(r.Context(), id, username, req.CanView, req.CanEdit, req.CanDelete, usernameFromContext(r.Context()))
 			switch {
 			case errors.Is(err, ErrMapPermissionInvalid):
 				http.Error(w, "map or username does not exist", http.StatusBadRequest)

@@ -108,9 +108,14 @@ paths:
     get:
       tags: [maps]
       summary: List maps
+      description: >-
+        Returns only the maps the acting user may see: maps marked
+        `visibleToAll`, maps they created, maps they hold a per-map
+        view/edit/delete grant on, admins, and users whose global `can_edit`
+        or `can_delete` permission already lets them act on every map.
       responses:
         "200":
-          description: Array of maps
+          description: Array of visible maps
           content:
             application/json:
               schema:
@@ -153,6 +158,7 @@ paths:
     get:
       tags: [maps]
       summary: Get a map
+      description: Requires view access to this map (see `GET /maps`); returns 403 if the map is private and the acting user can't see it.
       responses:
         "200":
           description: The map
@@ -168,15 +174,17 @@ paths:
                 $ref: "#/components/schemas/ErrorMessage"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
     put:
       tags: [maps]
-      summary: Replace a map's name/currentVersion
+      summary: Replace a map's name/currentVersion/visibleToAll
       description: >
-        Requires the acting user's `can_edit` permission. Only `name` and
-        `currentVersion` are replaced; this does not touch the map_versions
-        history or any extracted files on disk.
+        Requires the acting user's `can_edit` permission (global or per-map).
+        `name`, `currentVersion`, and `visibleToAll` are replaced; this does
+        not touch the map_versions history or any extracted files on disk.
       requestBody:
         required: true
         content:
@@ -222,7 +230,9 @@ paths:
     get:
       tags: [maps]
       summary: List a map's upload history
-      description: Returns every version ever uploaded for this map, most recent first.
+      description: >-
+        Returns every version ever uploaded for this map, most recent first.
+        Requires view access to this map (see `GET /maps`).
       responses:
         "200":
           description: Array of versions
@@ -234,6 +244,8 @@ paths:
                   $ref: "#/components/schemas/MapVersion"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -297,9 +309,10 @@ paths:
       summary: List a map's per-user permission grants
       description: >-
         Requires the acting user's `is_admin` permission, same as the global
-        Users API. A grant only adds `can_edit`/`can_delete` capability for
-        that specific map on top of the user's global permissions — it never
-        removes capability a user's global flags already give them.
+        Users API. A grant only adds `can_view`/`can_edit`/`can_delete`
+        capability for that specific map on top of the user's global
+        permissions — it never removes capability a user's global flags
+        already give them.
       responses:
         "200":
           description: Array of grants
@@ -496,8 +509,9 @@ paths:
         `<data-root>/<id>/<version>/` (no bounds are stored) and returns the
         lon/lat bounding box, derived from the tiles at the lowest zoom level
         present, plus that level as `minZoom` and the highest level present as
-        `maxZoom`. Intended for initializing a preview map's view. Any
-        authenticated user may call this; no `can_*` permission is required.
+        `maxZoom`. Intended for initializing a preview map's view. Requires
+        view access to this map (see `GET /maps`); no `can_*` action
+        permission is required.
       responses:
         "200":
           description: Computed bounds
@@ -507,6 +521,8 @@ paths:
                 $ref: "#/components/schemas/TileBounds"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           description: Version not found or has no tiles
 
@@ -532,8 +548,9 @@ paths:
       tags: [files]
       summary: Fetch an extracted tile file from a map version
       description: >-
-        Serves files straight out of `<data-root>/<id>/<version>/`. Any
-        authenticated user may read; no `can_*` permission is required.
+        Serves files straight out of `<data-root>/<id>/<version>/`. Requires
+        view access to this map (see `GET /maps`); no `can_*` action
+        permission is required.
       responses:
         "200":
           description: File contents
@@ -544,6 +561,8 @@ paths:
                 format: binary
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           description: Version or file not found
 
@@ -621,6 +640,9 @@ components:
           type: string
         currentVersion:
           type: string
+        visibleToAll:
+          type: boolean
+          description: Whether every authenticated user can see this map. Defaults to false (private) if omitted.
 
     Map:
       type: object
@@ -632,6 +654,13 @@ components:
           type: string
         currentVersion:
           type: string
+        visibleToAll:
+          type: boolean
+          description: >-
+            Whether every authenticated user can see this map. When false,
+            only admins, the creator, users whose global `can_edit`/`can_delete`
+            already lets them act on any map, and users with a per-map grant
+            can see it.
         createdAt:
           type: string
           format: date-time
@@ -720,8 +749,10 @@ components:
 
     MapPermissionRequest:
       type: object
-      required: [canEdit, canDelete]
+      required: [canView, canEdit, canDelete]
       properties:
+        canView:
+          type: boolean
         canEdit:
           type: boolean
         canDelete:
@@ -732,6 +763,8 @@ components:
       properties:
         username:
           type: string
+        canView:
+          type: boolean
         canEdit:
           type: boolean
         canDelete:

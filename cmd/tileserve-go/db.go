@@ -75,6 +75,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 
 	_, err = s.pool.Exec(ctx, `
+		ALTER TABLE maps ADD COLUMN IF NOT EXISTS visible_to_all BOOLEAN NOT NULL DEFAULT false;
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate maps visibility column: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS map_versions (
 			map_uuid   UUID NOT NULL REFERENCES maps(uuid) ON DELETE CASCADE,
 			version    TEXT NOT NULL,
@@ -100,6 +107,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate map_permissions table: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		ALTER TABLE map_permissions ADD COLUMN IF NOT EXISTS can_view BOOLEAN NOT NULL DEFAULT false;
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate map_permissions view column: %w", err)
 	}
 	return nil
 }
