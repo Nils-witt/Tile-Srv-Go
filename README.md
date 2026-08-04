@@ -9,8 +9,8 @@ tool (e.g. paste into https://editor.swagger.io, or `npx @redocly/cli preview-do
 
 A simple browser UI is served at `/ui/` — sign in there directly, it drives the same JSON API described below.
 It covers maps (create/edit/delete, upload versions, view history, preview on an interactive
-[MapLibre GL](https://maplibre.org/) map) and, for admins, user management. MapLibre is vendored under
-`cmd/tileserve-go/vendor/` and served from `/ui/vendor/`, so the UI has no external dependencies at runtime.
+[MapLibre GL](https://maplibre.org/) map) and, for admins, user management and per-map permissions. MapLibre is
+loaded from the jsDelivr CDN.
 
 ## Run
 
@@ -98,6 +98,28 @@ extracted and the version is still created (even if it ends up empty).
 Every user has four global permission flags — `can_create`, `can_edit`, `can_delete`, and `is_admin` — checked on
 the corresponding requests (map list/get are unrestricted for any authenticated user; `is_admin` gates the Users
 API below). Seeded/new users default to all four `true`.
+
+#### Per-map permissions
+
+On top of the global flags, admins can grant a specific user `can_edit`/`can_delete` on a single map, without
+giving them the matching global permission (which would apply to every map). A per-map grant only ever adds
+capability — a user who already has the global flag doesn't need one, and a grant can't take capability away from
+someone who does. `PUT`/`DELETE /maps/<uuid>` and `POST /maps/<uuid>/upload` all accept either the global flag or a
+matching per-map grant.
+
+```sh
+# list a map's per-user grants
+curl localhost:8085/maps/<uuid>/permissions -H "Authorization: Bearer <token>"
+
+# grant (or replace) alice's edit access to just this map
+curl -X PUT localhost:8085/maps/<uuid>/permissions/alice -H "Authorization: Bearer <token>" \
+  -d '{"canEdit":true,"canDelete":false}'
+
+# revoke it
+curl -X DELETE localhost:8085/maps/<uuid>/permissions/alice -H "Authorization: Bearer <token>"
+```
+
+Managing per-map permissions requires `is_admin`, same as the Users API.
 
 ### Users API
 

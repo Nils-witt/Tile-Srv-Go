@@ -86,6 +86,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate map_versions table: %w", err)
 	}
+
+	_, err = s.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS map_permissions (
+			map_uuid   UUID NOT NULL REFERENCES maps(uuid) ON DELETE CASCADE,
+			username   TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+			can_edit   BOOLEAN NOT NULL DEFAULT false,
+			can_delete BOOLEAN NOT NULL DEFAULT false,
+			granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			granted_by TEXT NOT NULL,
+			PRIMARY KEY (map_uuid, username)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate map_permissions table: %w", err)
+	}
 	return nil
 }
 

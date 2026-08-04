@@ -247,6 +247,43 @@
     </div>
   </div>
 
+  <div id="perm-overlay" class="modal-overlay hidden">
+    <div class="modal" style="height:auto; max-height:88vh;">
+      <div class="modal-header">
+        <h2 id="perm-title">Permissions</h2>
+        <button class="secondary" id="perm-close">Close</button>
+      </div>
+      <div style="padding:1rem; overflow:auto;">
+        <p id="perm-error" class="hidden" style="color:#dc2626"></p>
+        <table>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th class="checkbox-cell">Edit</th>
+              <th class="checkbox-cell">Delete</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="perm-body"></tbody>
+        </table>
+        <p id="perm-empty" class="muted hidden">No per-map grants yet.</p>
+        <div class="row" style="margin-top:1rem">
+          <div class="field">
+            <label for="perm-add-user">Add user</label>
+            <select id="perm-add-user"></select>
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="perm-add-edit" checked> Can edit</label>
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="perm-add-delete"> Can delete</label>
+          </div>
+          <button id="perm-add-btn">Grant</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script>
     const TOKEN_KEY = 'tileserve_token';
@@ -267,6 +304,9 @@
     const tabUsersBtn = document.getElementById('tab-users-btn');
     const tabMaps = document.getElementById('tab-maps');
     const tabUsers = document.getElementById('tab-users');
+
+    let isAdmin = false;
+    let allUsers = [];
 
     function getToken() { return sessionStorage.getItem(TOKEN_KEY); }
     function setSession(token, username) {
@@ -315,9 +355,13 @@
       try {
         const res = await api('/users');
         const users = await res.json();
+        isAdmin = true;
+        allUsers = users;
         tabUsersBtn.classList.remove('hidden');
         renderUsers(users);
       } catch (err) {
+        isAdmin = false;
+        allUsers = [];
         tabUsersBtn.classList.add('hidden');
         showTab('maps');
       }
@@ -415,7 +459,16 @@
       deleteBtn.textContent = 'Delete';
       deleteBtn.onclick = () => deleteMap(m.uuid);
 
-      actions.append(editBtn, uploadBtn, fileInput, versionsBtn, previewBtn, deleteBtn);
+      actions.append(editBtn, uploadBtn, fileInput, versionsBtn, previewBtn);
+
+      const permBtn = document.createElement('button');
+      permBtn.className = 'secondary';
+      permBtn.textContent = 'Permissions';
+      permBtn.onclick = () => openPermissions(m);
+      actions.append(permBtn);
+
+
+      actions.append(deleteBtn);
 
       const versionsDiv = document.createElement('div');
       versionsDiv.className = 'versions hidden';
@@ -546,6 +599,132 @@
       if (e.target === previewOverlay) closePreview();
     });
 
+    const permOverlay = document.getElementById('perm-overlay');
+    const permTitle = document.getElementById('perm-title');
+    const permBody = document.getElementById('perm-body');
+    const permEmptyEl = document.getElementById('perm-empty');
+    const permErrorEl = document.getElementById('perm-error');
+    const permClose = document.getElementById('perm-close');
+    const permAddUser = document.getElementById('perm-add-user');
+    const permAddEdit = document.getElementById('perm-add-edit');
+    const permAddDelete = document.getElementById('perm-add-delete');
+    const permAddBtn = document.getElementById('perm-add-btn');
+    let permMapId = null;
+
+    function permError(message) {
+      if (!message) {
+        permErrorEl.classList.add('hidden');
+        return;
+      }
+      permErrorEl.textContent = message;
+      permErrorEl.classList.remove('hidden');
+    }
+
+    async function openPermissions(m) {
+      permMapId = m.uuid;
+      permTitle.textContent = 'Permissions — ' + m.name;
+      permError(null);
+      permAddUser.innerHTML = allUsers.map(u => '<option value="' + u.username + '">' + u.username + '</option>').join('');
+      permOverlay.classList.remove('hidden');
+      await loadMapPermissions();
+    }
+
+    function closePermissions() {
+      permOverlay.classList.add('hidden');
+      permMapId = null;
+    }
+
+    async function loadMapPermissions() {
+      permError(null);
+      try {
+        const res = await api('/maps/' + permMapId + '/permissions');
+        renderMapPermissions(await res.json());
+      } catch (err) {
+        if (err.message !== 'unauthorized') permError(err.message);
+      }
+    }
+
+    function renderMapPermissions(grants) {
+      permBody.innerHTML = '';
+      permEmptyEl.classList.toggle('hidden', grants.length > 0);
+      for (const g of grants) {
+        permBody.appendChild(renderMapPermissionRow(g));
+      }
+    }
+
+    function renderMapPermissionRow(g) {
+      const tr = document.createElement('tr');
+
+      const userTd = document.createElement('td');
+      userTd.textContent = g.username;
+
+      const editCb = document.createElement('input');
+      editCb.type = 'checkbox';
+      editCb.checked = g.canEdit;
+      const deleteCb = document.createElement('input');
+      deleteCb.type = 'checkbox';
+      deleteCb.checked = g.canDelete;
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'secondary';
+      saveBtn.textContent = 'Save';
+      saveBtn.onclick = () => grantMapPermission(g.username, editCb.checked, deleteCb.checked);
+
+      const revokeBtn = document.createElement('button');
+      revokeBtn.className = 'danger';
+      revokeBtn.textContent = 'Revoke';
+      revokeBtn.onclick = () => revokeMapPermission(g.username);
+
+      const actionsTd = document.createElement('td');
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      actions.append(saveBtn, revokeBtn);
+      actionsTd.append(actions);
+
+      const editTd = document.createElement('td');
+      editTd.className = 'checkbox-cell';
+      editTd.appendChild(editCb);
+      const deleteTd = document.createElement('td');
+      deleteTd.className = 'checkbox-cell';
+      deleteTd.appendChild(deleteCb);
+
+      tr.append(userTd, editTd, deleteTd, actionsTd);
+      return tr;
+    }
+
+    async function grantMapPermission(username, canEdit, canDelete) {
+      permError(null);
+      try {
+        await api('/maps/' + permMapId + '/permissions/' + encodeURIComponent(username), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ canEdit, canDelete }),
+        });
+        await loadMapPermissions();
+      } catch (err) {
+        if (err.message !== 'unauthorized') permError(err.message);
+      }
+    }
+
+    async function revokeMapPermission(username) {
+      permError(null);
+      try {
+        await api('/maps/' + permMapId + '/permissions/' + encodeURIComponent(username), { method: 'DELETE' });
+        await loadMapPermissions();
+      } catch (err) {
+        if (err.message !== 'unauthorized') permError(err.message);
+      }
+    }
+
+    permClose.addEventListener('click', closePermissions);
+    permOverlay.addEventListener('click', (e) => {
+      if (e.target === permOverlay) closePermissions();
+    });
+    permAddBtn.addEventListener('click', () => {
+      if (!permAddUser.value) return;
+      grantMapPermission(permAddUser.value, permAddEdit.checked, permAddDelete.checked);
+    });
+
     async function uploadVersion(id, file) {
       if (!file) return;
       appError(null);
@@ -574,7 +753,8 @@
       usersError(null);
       try {
         const res = await api('/users');
-        renderUsers(await res.json());
+        allUsers = await res.json();
+        renderUsers(allUsers);
       } catch (err) {
         if (err.message !== 'unauthorized') usersError(err.message);
       }

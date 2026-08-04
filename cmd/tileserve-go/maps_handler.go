@@ -56,6 +56,34 @@ func requirePermission(w http.ResponseWriter, r *http.Request, store *Store, all
 	return true
 }
 
+// requireMapPermission checks whether the acting user may perform an action
+// on a specific map: it passes if their global permissions allow it (admins
+// always pass), or failing that, if they hold a matching per-map grant. A
+// per-map grant only ever adds capability on top of the global flags, never
+// removes it.
+func requireMapPermission(w http.ResponseWriter, r *http.Request, store *Store, mapID uuid.UUID, globalAllowed func(Permissions) bool, mapAllowed func(MapPermission) bool) bool {
+	username := usernameFromContext(r.Context())
+	perms, err := store.GetPermissions(r.Context(), username)
+	if err != nil {
+		http.Error(w, "failed to check permissions", http.StatusInternalServerError)
+		return false
+	}
+	if perms.IsAdmin || globalAllowed(perms) {
+		return true
+	}
+
+	mp, err := store.GetMapPermission(r.Context(), mapID, username)
+	if err != nil {
+		http.Error(w, "failed to check permissions", http.StatusInternalServerError)
+		return false
+	}
+	if !mapAllowed(mp) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 func mapsCollectionHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -114,6 +142,14 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 			mapVersionsHandler(store, id)(w, r)
 			return
 		}
+		if len(segments) == 2 && segments[1] == "permissions" {
+			mapPermissionsCollectionHandler(store, id)(w, r)
+			return
+		}
+		if len(segments) == 3 && segments[1] == "permissions" {
+			mapPermissionItemHandler(store, id, segments[2])(w, r)
+			return
+		}
 		if len(segments) == 4 && segments[1] == "version" && segments[3] == "bounds" {
 			mapVersionBoundsHandler(dataRoot, id, segments[2])(w, r)
 			return
@@ -143,7 +179,10 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 			}
 
 		case http.MethodPut:
-			if !requirePermission(w, r, store, func(p Permissions) bool { return p.CanEdit }) {
+			if !requireMapPermission(w, r, store, id,
+				func(p Permissions) bool { return p.CanEdit },
+				func(mp MapPermission) bool { return mp.CanEdit },
+			) {
 				return
 			}
 
@@ -168,7 +207,10 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 			}
 
 		case http.MethodDelete:
-			if !requirePermission(w, r, store, func(p Permissions) bool { return p.CanDelete }) {
+			if !requireMapPermission(w, r, store, id,
+				func(p Permissions) bool { return p.CanDelete },
+				func(mp MapPermission) bool { return mp.CanDelete },
+			) {
 				return
 			}
 
@@ -204,6 +246,72 @@ func mapVersionsHandler(store *Store, id uuid.UUID) http.HandlerFunc {
 			http.Error(w, "failed to list map versions", http.StatusInternalServerError)
 		default:
 			writeJSON(w, http.StatusOK, versions)
+		}
+	}
+}
+
+type mapPermissionRequest struct {
+	CanEdit   bool `json:"canEdit"`
+	CanDelete bool `json:"canDelete"`
+}
+
+// mapPermissionsCollectionHandler lists a map's per-user permission grants.
+// Managing per-map permissions is admin-only, same as the global Users API.
+func mapPermissionsCollectionHandler(store *Store, id uuid.UUID) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireAdmin(w, r, store) {
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		perms, err := store.ListMapPermissions(r.Context(), id)
+		if err != nil {
+			http.Error(w, "failed to list map permissions", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, perms)
+	}
+}
+
+// mapPermissionItemHandler grants or revokes a single user's per-map
+// permission. Managing per-map permissions is admin-only, same as the global
+// Users API.
+func mapPermissionItemHandler(store *Store, id uuid.UUID, username string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireAdmin(w, r, store) {
+			return
+		}
+
+		switch r.Method {
+		case http.MethodPut:
+			var req mapPermissionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+
+			p, err := store.SetMapPermission(r.Context(), id, username, req.CanEdit, req.CanDelete, usernameFromContext(r.Context()))
+			switch {
+			case errors.Is(err, ErrMapPermissionInvalid):
+				http.Error(w, "map or username does not exist", http.StatusBadRequest)
+			case err != nil:
+				http.Error(w, "failed to set map permission", http.StatusInternalServerError)
+			default:
+				writeJSON(w, http.StatusOK, p)
+			}
+
+		case http.MethodDelete:
+			if err := store.DeleteMapPermission(r.Context(), id, username); err != nil {
+				http.Error(w, "failed to delete map permission", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	}
 }
@@ -370,7 +478,10 @@ func uploadMapVersionHandler(store *Store, dataRoot string, id uuid.UUID) http.H
 			return
 		}
 
-		if !requirePermission(w, r, store, func(p Permissions) bool { return p.CanCreate }) {
+		if !requireMapPermission(w, r, store, id,
+			func(p Permissions) bool { return p.CanCreate },
+			func(mp MapPermission) bool { return mp.CanEdit },
+		) {
 			return
 		}
 

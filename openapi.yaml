@@ -289,6 +289,78 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
 
+  /maps/{id}/permissions:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+    get:
+      tags: [maps]
+      summary: List a map's per-user permission grants
+      description: >-
+        Requires the acting user's `is_admin` permission, same as the global
+        Users API. A grant only adds `can_edit`/`can_delete` capability for
+        that specific map on top of the user's global permissions — it never
+        removes capability a user's global flags already give them.
+      responses:
+        "200":
+          description: Array of grants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MapPermission"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /maps/{id}/permissions/{username}:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [maps]
+      summary: Grant or replace a user's per-map permission
+      description: Requires the acting user's `is_admin` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MapPermissionRequest"
+      responses:
+        "200":
+          description: Grant created or updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MapPermission"
+        "400":
+          description: Invalid request body, or the map/username doesn't exist
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    delete:
+      tags: [maps]
+      summary: Revoke a user's per-map permission
+      description: Requires the acting user's `is_admin` permission. A no-op if no grant exists.
+      responses:
+        "204":
+          description: Grant revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /users:
     get:
       tags: [users]
@@ -645,3 +717,27 @@ components:
         createdAt:
           type: string
           format: date-time
+
+    MapPermissionRequest:
+      type: object
+      required: [canEdit, canDelete]
+      properties:
+        canEdit:
+          type: boolean
+        canDelete:
+          type: boolean
+
+    MapPermission:
+      type: object
+      properties:
+        username:
+          type: string
+        canEdit:
+          type: boolean
+        canDelete:
+          type: boolean
+        grantedAt:
+          type: string
+          format: date-time
+        grantedBy:
+          type: string
