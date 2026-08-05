@@ -4,8 +4,9 @@ A small Go HTTP server for managing maps and their versioned tile uploads behind
 Users are stored in a Postgres `users` table (bcrypt-hashed passwords). Uploaded map versions are extracted to
 `<data-root>/<uuid>/<version>/` on disk and served back at `/maps/<uuid>/version/<version>/...`.
 
-The full API is documented in [`openapi.yaml`](openapi.yaml) (OpenAPI 3.0) — view it with any Swagger/OpenAPI
-tool (e.g. paste into https://editor.swagger.io, or `npx @redocly/cli preview-docs openapi.yaml`).
+The full API is documented in [`openapi.yaml`](cmd/tileserve-go/openapi.yaml) (OpenAPI 3.0), and served at
+runtime from `/openapi.yaml` — view it with any Swagger/OpenAPI tool (e.g. paste into
+https://editor.swagger.io, or `npx @redocly/cli preview-docs openapi.yaml`).
 
 A simple browser UI is served at `/ui/` — sign in there directly, it drives the same JSON API described below.
 It covers maps (create/edit/delete, upload versions, view history, preview on an interactive

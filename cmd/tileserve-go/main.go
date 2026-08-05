@@ -62,6 +62,8 @@ func main() {
 	mux.HandleFunc("/login", loginHandler(secret, store))
 	// GET /ui/: serves the self-contained management UI (public, unauthenticated).
 	mux.HandleFunc("/ui/", uiHandler())
+	// GET /openapi.yaml: serves the OpenAPI 3.0 spec (public, unauthenticated).
+	mux.HandleFunc("/openapi.yaml", openapiHandler())
 	// GET /maps, POST /maps: list maps visible to the caller / create a map.
 	mux.Handle("/maps", requireAuth(secret, mapsCollectionHandler(store)))
 	// /maps/{id}, /maps/{id}/upload, /maps/{id}/versions,
