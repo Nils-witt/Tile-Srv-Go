@@ -14,5 +14,5 @@ FROM gcr.io/distroless/static-debian12:nonroot
 ENV DATA_ROOT=/data
 VOLUME ["/data"]
 COPY --from=builder /out/tileserve-go /tileserve-go
-EXPOSE 8085
+EXPOSE 80
 ENTRYPOINT ["/tileserve-go"]
