@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 
 FROM golang:1.26-alpine AS builder
+LABEL org.opencontainers.image.source="https://github.com/Nils-witt/Tileserve-GO"
 WORKDIR /src
 
 COPY go.mod go.sum ./
