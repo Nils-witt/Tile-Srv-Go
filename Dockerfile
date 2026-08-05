@@ -12,6 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/tileserve-go ./cmd/tileserve-go
 
 FROM gcr.io/distroless/static-debian12:nonroot
 ENV DATA_ROOT=/data
+ENV PORT=80
 VOLUME ["/data"]
 COPY --from=builder /out/tileserve-go /tileserve-go
 EXPOSE 80
