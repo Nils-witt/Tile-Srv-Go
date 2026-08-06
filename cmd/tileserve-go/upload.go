@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -105,6 +108,11 @@ func uploadMapVersionHandler(store *Store, dataRoot string, id uuid.UUID) http.H
 		}
 		if err != nil {
 			http.Error(w, "invalid archive file: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if err := writeTileIndex(stagingDir); err != nil {
+			http.Error(w, "failed to build tile index", http.StatusInternalServerError)
 			return
 		}
 
@@ -294,6 +302,84 @@ func extractZip(zipPath, destDir string) error {
 		if err := extractZipFile(f, targetPath); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// tileIndex lists every tile extracted into a map version, written as
+// index.json alongside the tiles so a client can enumerate what's available
+// without probing z/x/y coordinates blindly.
+type tileIndex struct {
+	Tiles []tileCoord `json:"tiles"`
+}
+
+type tileCoord struct {
+	Z int `json:"z"`
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+// writeTileIndex scans destDir's extracted z/x/y.png tile pyramid and writes
+// an index.json listing every tile found (sorted by z, then x, then y).
+func writeTileIndex(destDir string) error {
+	zEntries, err := os.ReadDir(destDir)
+	if err != nil {
+		return fmt.Errorf("read version dir: %w", err)
+	}
+
+	var tiles []tileCoord
+	for _, ze := range zEntries {
+		if !ze.IsDir() {
+			continue
+		}
+		z, err := strconv.Atoi(ze.Name())
+		if err != nil {
+			continue
+		}
+
+		xEntries, err := os.ReadDir(filepath.Join(destDir, ze.Name()))
+		if err != nil {
+			return fmt.Errorf("read zoom dir %s: %w", ze.Name(), err)
+		}
+		for _, xe := range xEntries {
+			if !xe.IsDir() {
+				continue
+			}
+			x, err := strconv.Atoi(xe.Name())
+			if err != nil {
+				continue
+			}
+
+			yEntries, err := os.ReadDir(filepath.Join(destDir, ze.Name(), xe.Name()))
+			if err != nil {
+				return fmt.Errorf("read x dir %s/%s: %w", ze.Name(), xe.Name(), err)
+			}
+			for _, ye := range yEntries {
+				y, err := strconv.Atoi(strings.TrimSuffix(ye.Name(), ".png"))
+				if err != nil || !numericPNGRE.MatchString(ye.Name()) {
+					continue
+				}
+				tiles = append(tiles, tileCoord{Z: z, X: x, Y: y})
+			}
+		}
+	}
+
+	sort.Slice(tiles, func(i, j int) bool {
+		if tiles[i].Z != tiles[j].Z {
+			return tiles[i].Z < tiles[j].Z
+		}
+		if tiles[i].X != tiles[j].X {
+			return tiles[i].X < tiles[j].X
+		}
+		return tiles[i].Y < tiles[j].Y
+	})
+
+	data, err := json.Marshal(tileIndex{Tiles: tiles})
+	if err != nil {
+		return fmt.Errorf("marshal tile index: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "index.json"), data, 0o644); err != nil {
+		return fmt.Errorf("write tile index: %w", err)
 	}
 	return nil
 }

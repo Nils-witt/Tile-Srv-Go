@@ -305,6 +305,9 @@ paths:
         Entries that don't match this (or are symlinks, or attempt path
         traversal) are silently skipped rather than failing the upload; the
         version is still created from whatever did extract successfully.
+        After extraction, an `index.json` listing every `{z, x, y}` tile
+        found (sorted by z, then x, then y) is written alongside the tiles
+        and served like any other file under this version.
       requestBody:
         required: true
         content:

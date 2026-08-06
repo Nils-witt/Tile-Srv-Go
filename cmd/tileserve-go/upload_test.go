@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -176,6 +177,52 @@ func TestExtractTar(t *testing.T) {
 				t.Fatalf("invalidly named entry should have been skipped")
 			}
 		})
+	}
+}
+
+func TestWriteTileIndex(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "up.zip")
+	destDir := filepath.Join(dir, "dest")
+	if err := os.Mkdir(destDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	buildZip(t, archivePath, map[string]string{
+		"3/1/2.png": "tile-data",
+		"3/1/5.png": "tile-data",
+		"1/0/0.png": "tile-data",
+	})
+	if err := extractZip(archivePath, destDir); err != nil {
+		t.Fatalf("extractZip: %v", err)
+	}
+
+	if err := writeTileIndex(destDir); err != nil {
+		t.Fatalf("writeTileIndex: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(destDir, "index.json"))
+	if err != nil {
+		t.Fatalf("expected index.json written: %v", err)
+	}
+
+	var idx tileIndex
+	if err := json.Unmarshal(data, &idx); err != nil {
+		t.Fatalf("index.json is not valid JSON: %v", err)
+	}
+
+	want := []tileCoord{
+		{Z: 1, X: 0, Y: 0},
+		{Z: 3, X: 1, Y: 2},
+		{Z: 3, X: 1, Y: 5},
+	}
+	if len(idx.Tiles) != len(want) {
+		t.Fatalf("tiles = %+v, want %+v", idx.Tiles, want)
+	}
+	for i, tile := range idx.Tiles {
+		if tile != want[i] {
+			t.Fatalf("tiles[%d] = %+v, want %+v", i, tile, want[i])
+		}
 	}
 }
 
