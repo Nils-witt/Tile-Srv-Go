@@ -1,14 +1,17 @@
 services:
-  db:
+  overlaydb:
     image: postgres:latest
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: pass
       POSTGRES_DB: db
-    ports:
-      - "5432:5432"
     volumes:
-      - db_data:/var/lib/postgresql
-
-volumes:
-  db_data:
+      - ${MOUNT_POSTGRES_DATA:-./data/postgres}:/var/lib/postgresql
+  overlay-serv:
+    image: ghcr.io/nils-witt/tileserve-go
+    ports:
+      - "8085:80"
+    environment:
+      DATABASE_URL: postgres://user:pass@overlaydb:5432/db?sslmode=disable
+    volumes:
+      - ${MOUNT_OSM_OVERLAYS:-./data/overlays}:/data
