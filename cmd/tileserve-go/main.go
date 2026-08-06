@@ -58,8 +58,10 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 	// GET /login: serves the login HTML page. POST /login: exchanges
-	// username/password for a JWT.
+	// username/password for a JWT and a refresh token.
 	mux.HandleFunc("/login", loginHandler(secret, store))
+	// POST /refresh: exchanges a refresh token for a new JWT and refresh token.
+	mux.HandleFunc("/refresh", refreshHandler(secret, store))
 	// GET /ui/: serves the self-contained management UI (public, unauthenticated).
 	mux.HandleFunc("/ui/", uiHandler())
 	// GET /openapi.yaml: serves the OpenAPI 3.0 spec (public, unauthenticated).

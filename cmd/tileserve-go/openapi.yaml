@@ -86,6 +86,42 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
 
+  /refresh:
+    post:
+      tags: [auth]
+      summary: Exchange a refresh token for a new JWT
+      description: >-
+        Redeems a refresh token (issued by POST /login or a previous call to
+        this endpoint) for a new login JWT, without re-sending credentials.
+        The refresh token is single-use: this call also revokes it and
+        returns a new one to use next time.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Refresh succeeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          description: Invalid request body
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Invalid, expired, or already-used refresh token
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
   /ui/:
     get:
       tags: [ui]
@@ -634,6 +670,18 @@ components:
       type: object
       properties:
         token:
+          type: string
+        refresh_token:
+          type: string
+          description: >-
+            Single-use token that can be redeemed at POST /refresh for a new
+            login token (and a new refresh token) without re-authenticating.
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
           type: string
 
     MapRequest:

@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -22,8 +23,13 @@ func usernameFromContext(ctx context.Context) string {
 }
 
 const (
-	defaultTokenTTL = 24 * time.Hour
+	defaultTokenTTL = 1 * time.Hour
 	maxTokenTTL     = 7 * 24 * time.Hour
+
+	// refreshTokenTTL is how long a refresh token remains redeemable. It
+	// deliberately outlives login token TTLs so a client can stay signed in
+	// by refreshing well after its short-lived login token has expired.
+	refreshTokenTTL = 30 * 24 * time.Hour
 )
 
 //go:embed login.html
@@ -36,13 +42,16 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	Token string `json:"token"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 // loginHandler serves GET /login (the static login page) and handles
 // POST /login: it authenticates the given username/password against store
 // and, on success, issues a signed JWT valid for the requested TTL (capped
-// at maxTokenTTL, defaulting to defaultTokenTTL).
+// at maxTokenTTL, defaulting to defaultTokenTTL) alongside a refresh token
+// (valid for refreshTokenTTL) that can later be exchanged at POST /refresh
+// for a new login JWT without re-sending credentials.
 func loginHandler(secret []byte, store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -86,8 +95,63 @@ func loginHandler(secret []byte, store *Store) http.HandlerFunc {
 			return
 		}
 
+		refreshToken, _, err := store.CreateRefreshToken(r.Context(), req.Username, refreshTokenTTL)
+		if err != nil {
+			http.Error(w, "failed to issue token", http.StatusInternalServerError)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(loginResponse{Token: token})
+		_ = json.NewEncoder(w).Encode(loginResponse{Token: token, RefreshToken: refreshToken})
+	}
+}
+
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+// refreshHandler serves POST /refresh: redeems a valid, unexpired refresh
+// token (as previously issued by loginHandler or a prior call to this
+// handler) for a new login JWT, plus a new refresh token that replaces it.
+// The old refresh token is revoked as part of the same exchange, so each
+// one is single-use; reusing an already-redeemed refresh token is treated
+// as invalid, same as an unknown or expired one.
+func refreshHandler(secret []byte, store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req refreshRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		username, newRefreshToken, _, err := store.RotateRefreshToken(r.Context(), req.RefreshToken, refreshTokenTTL)
+		switch {
+		case errors.Is(err, ErrInvalidRefreshToken):
+			http.Error(w, "invalid or expired refresh token", http.StatusUnauthorized)
+			return
+		case err != nil:
+			http.Error(w, "failed to refresh token", http.StatusInternalServerError)
+			return
+		}
+
+		claims := jwt.RegisteredClaims{
+			Subject:   username,
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(defaultTokenTTL)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		}
+		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret)
+		if err != nil {
+			http.Error(w, "failed to issue token", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(loginResponse{Token: token, RefreshToken: newRefreshToken})
 	}
 }
 

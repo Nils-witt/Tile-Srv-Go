@@ -122,6 +122,19 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate map_permissions view column: %w", err)
 	}
+
+	_, err = s.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS refresh_tokens (
+			token_hash TEXT PRIMARY KEY,
+			username   TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+			expires_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			revoked_at TIMESTAMPTZ
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate refresh_tokens table: %w", err)
+	}
 	return nil
 }
 
