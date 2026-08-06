@@ -51,6 +51,10 @@ func main() {
 		}
 	}
 
+	if err := ensureTileIndexes(*dataRoot); err != nil {
+		log.Fatalf("backfill tile indexes: %v", err)
+	}
+
 	mux := http.NewServeMux()
 	// GET /healthz: liveness probe, always returns 200 "ok".
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

@@ -101,7 +101,9 @@ extracted and the version is still created (even if it ends up empty).
 After extraction, the server writes an `index.json` alongside the tiles listing every `{z, x, y}` tile found (sorted
 by z, then x, then y), e.g. `{"tiles":[{"z":1,"x":0,"y":0},{"z":3,"x":1,"y":2}]}`. It's served like any other file at
 `GET /maps/{id}/version/{version}/index.json`, letting a client enumerate a version's tiles without probing
-coordinates blindly.
+coordinates blindly. On startup, the server also walks `-data-root` and backfills a missing `index.json` for any
+existing map/version directory that doesn't already have one (e.g. one extracted by an older build), so this never
+requires a re-upload.
 
 Every user has four global permission flags — `can_create`, `can_edit`, `can_delete`, and `is_admin` — checked on
 the corresponding requests (`is_admin` also gates the Users API below). Seeded/new users default to all four

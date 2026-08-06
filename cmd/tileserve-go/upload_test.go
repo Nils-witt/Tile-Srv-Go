@@ -226,6 +226,74 @@ func TestWriteTileIndex(t *testing.T) {
 	}
 }
 
+func TestEnsureTileIndexes(t *testing.T) {
+	dataRoot := t.TempDir()
+
+	// overlay "a": version "1" already has an (arbitrary, pre-existing)
+	// index.json that must be left untouched.
+	v1Dir := filepath.Join(dataRoot, "a", "1")
+	if err := os.MkdirAll(v1Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(v1Dir, "index.json"), []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// overlay "a": version "2" is missing index.json and has tiles.
+	v2Dir := filepath.Join(dataRoot, "a", "2")
+	if err := os.MkdirAll(filepath.Join(v2Dir, "4", "8"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(v2Dir, "4", "8", "16.png"), []byte("tile"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// overlay "a": an in-progress upload staging dir, which must be skipped
+	// (non-numeric name).
+	if err := os.MkdirAll(filepath.Join(dataRoot, "a", ".upload-123"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// overlay "b": version "1" missing index.json, no tiles at all.
+	v3Dir := filepath.Join(dataRoot, "b", "1")
+	if err := os.MkdirAll(v3Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureTileIndexes(dataRoot); err != nil {
+		t.Fatalf("ensureTileIndexes: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(v1Dir, "index.json"))
+	if err != nil || string(got) != "existing" {
+		t.Fatalf("pre-existing index.json was overwritten: got %q, %v", got, err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(v2Dir, "index.json"))
+	if err != nil {
+		t.Fatalf("expected index.json backfilled for a/2: %v", err)
+	}
+	var idx tileIndex
+	if err := json.Unmarshal(data, &idx); err != nil {
+		t.Fatalf("a/2 index.json is not valid JSON: %v", err)
+	}
+	if want := []tileCoord{{Z: 4, X: 8, Y: 16}}; len(idx.Tiles) != 1 || idx.Tiles[0] != want[0] {
+		t.Fatalf("a/2 tiles = %+v, want %+v", idx.Tiles, want)
+	}
+
+	data, err = os.ReadFile(filepath.Join(v3Dir, "index.json"))
+	if err != nil {
+		t.Fatalf("expected index.json backfilled for b/1: %v", err)
+	}
+	if err := json.Unmarshal(data, &idx); err != nil || len(idx.Tiles) != 0 {
+		t.Fatalf("b/1 index.json = %q, want empty tile list", data)
+	}
+
+	if _, err := os.Stat(filepath.Join(dataRoot, "a", ".upload-123", "index.json")); !os.IsNotExist(err) {
+		t.Fatalf("staging dir should not have gotten an index.json")
+	}
+}
+
 func TestExtractZipAndTarProduceEquivalentOutput(t *testing.T) {
 	entries := map[string]string{
 		"7/3/4.png": "same-tile",
