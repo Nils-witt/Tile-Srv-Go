@@ -15,6 +15,8 @@ tags:
     description: Login and token issuance
   - name: maps
     description: CRUD and version uploads for maps
+  - name: geo-objects
+    description: CRUD for geo objects (addresses/points of interest) tied to a map version
   - name: users
     description: Admin-only user account management
   - name: files
@@ -566,6 +568,145 @@ paths:
         "404":
           description: Version not found or has no tiles
 
+  /maps/{id}/version/{version}/geo-objects:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [geo-objects]
+      summary: List a map version's geo objects
+      description: Requires view access to this map (see `GET /maps`).
+      responses:
+        "200":
+          description: Array of geo objects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GeoObject"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [geo-objects]
+      summary: Create a geo object
+      description: Requires the acting user's `can_edit` permission (global or per-map).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GeoObjectRequest"
+      responses:
+        "201":
+          description: Geo object created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeoObject"
+        "400":
+          description: Invalid request body, missing name/latitude/longitude, or the map/version doesn't exist
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /maps/{id}/version/{version}/geo-objects/{geoObjectId}:
+    parameters:
+      - $ref: "#/components/parameters/MapId"
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: geoObjectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [geo-objects]
+      summary: Get a geo object
+      description: Requires view access to this map (see `GET /maps`).
+      responses:
+        "200":
+          description: The geo object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeoObject"
+        "400":
+          description: Invalid map or geo object id
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [geo-objects]
+      summary: Replace a geo object's fields
+      description: >-
+        Requires the acting user's `can_edit` permission (global or per-map).
+        The geo object's map and version are immutable after creation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GeoObjectRequest"
+      responses:
+        "200":
+          description: Updated geo object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeoObject"
+        "400":
+          description: Invalid request body or missing name/latitude/longitude
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [geo-objects]
+      summary: Delete a geo object
+      description: Requires the acting user's `can_delete` permission (global or per-map).
+      responses:
+        "204":
+          description: Geo object deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /maps/{id}/version/{version}/{filePath}:
     parameters:
       - $ref: "#/components/parameters/MapId"
@@ -749,6 +890,65 @@ components:
           type: string
           format: date-time
         createdBy:
+          type: string
+
+    GeoObjectRequest:
+      type: object
+      required: [name, latitude, longitude]
+      properties:
+        name:
+          type: string
+        externalId:
+          type: string
+        latitude:
+          type: number
+          format: double
+        longitude:
+          type: number
+          format: double
+        street:
+          type: string
+        housenumber:
+          type: string
+        postcode:
+          type: string
+
+    GeoObject:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+        mapUuid:
+          type: string
+          format: uuid
+        version:
+          type: string
+        name:
+          type: string
+        externalId:
+          type: string
+        latitude:
+          type: number
+          format: double
+        longitude:
+          type: number
+          format: double
+        street:
+          type: string
+        housenumber:
+          type: string
+        postcode:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        updatedBy:
           type: string
 
     TileBounds:

@@ -34,6 +34,29 @@ func TestMapVersionDir(t *testing.T) {
 	}
 }
 
+func TestIsVersionSubResourcePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		segments []string
+		want     bool
+	}{
+		{"bounds", []string{"id", "version", "3", "bounds"}, true},
+		{"geo-objects collection", []string{"id", "version", "3", "geo-objects"}, true},
+		{"geo-objects item", []string{"id", "version", "3", "geo-objects", "obj-uuid"}, true},
+		{"raw tile file", []string{"id", "version", "3", "0", "0", "0.png"}, false},
+		{"top-level raw tile file", []string{"id", "version", "3", "5.png"}, false},
+		{"not a version path", []string{"id", "upload"}, false},
+		{"too short", []string{"id", "version", "3"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isVersionSubResourcePath(tt.segments); got != tt.want {
+				t.Errorf("isVersionSubResourcePath(%v) = %v, want %v", tt.segments, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWriteJSON(t *testing.T) {
 	w := httptest.NewRecorder()
 	writeJSON(w, http.StatusCreated, map[string]string{"hello": "world"})

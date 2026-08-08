@@ -36,9 +36,10 @@ func (s *Store) Close() {
 	s.pool.Close()
 }
 
-// Migrate creates the users, maps, map_versions, and map_permissions tables
-// if they don't exist yet, and adds any columns introduced since the tables
-// were first created. It is idempotent and safe to run on every startup.
+// Migrate creates the users, maps, map_versions, map_permissions, and
+// geo_objects tables if they don't exist yet, and adds any columns
+// introduced since the tables were first created. It is idempotent and safe
+// to run on every startup.
 func (s *Store) Migrate(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS users (
@@ -101,6 +102,36 @@ func (s *Store) Migrate(ctx context.Context) error {
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate map_versions table: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS geo_objects (
+			uuid        UUID PRIMARY KEY,
+			map_uuid    UUID NOT NULL,
+			version     TEXT NOT NULL,
+			name        TEXT NOT NULL,
+			external_id TEXT NOT NULL DEFAULT '',
+			latitude    DOUBLE PRECISION NOT NULL,
+			longitude   DOUBLE PRECISION NOT NULL,
+			street      TEXT NOT NULL DEFAULT '',
+			housenumber TEXT NOT NULL DEFAULT '',
+			postcode    TEXT NOT NULL DEFAULT '',
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+			created_by  TEXT NOT NULL,
+			updated_by  TEXT NOT NULL,
+			FOREIGN KEY (map_uuid, version) REFERENCES map_versions(map_uuid, version) ON DELETE CASCADE
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate geo_objects table: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_geo_objects_map_version ON geo_objects (map_uuid, version);
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate geo_objects index: %w", err)
 	}
 
 	_, err = s.pool.Exec(ctx, `

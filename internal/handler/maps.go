@@ -30,6 +30,19 @@ func mapVersionDir(dataRoot string, id uuid.UUID, version string) string {
 	return filepath.Join(mapDir(dataRoot, id), version)
 }
 
+// isVersionSubResourcePath reports whether segments (the /maps/{id}/...
+// path, split on "/") addresses one of the JSON sub-resources nested under a
+// map version — .../version/{version}/bounds or
+// .../version/{version}/geo-objects[/{uuid}] — rather than a raw extracted
+// tile file. Reserving these path segments is safe: uploaded tile entries
+// are validated at extraction time to be purely numeric directories or
+// <number>.png files, so a real extracted path can never start with
+// "bounds" or "geo-objects".
+func isVersionSubResourcePath(segments []string) bool {
+	return len(segments) >= 4 && segments[1] == "version" &&
+		(segments[3] == "bounds" || segments[3] == "geo-objects")
+}
+
 type mapRequest struct {
 	Name             string `json:"name"`
 	CurrentVersion   string `json:"currentVersion"`
@@ -257,6 +270,8 @@ func MapsCollectionHandler(st *store.Store) http.HandlerFunc {
 //   - /maps/{id}/permissions[/{username}]:  mapPermissionsCollectionHandler /
 //     mapPermissionItemHandler
 //   - /maps/{id}/version/{version}/bounds (GET): mapVersionBoundsHandler
+//   - /maps/{id}/version/{version}/geo-objects[/{uuid}]:  geoObjectsCollectionHandler /
+//     geoObjectItemHandler
 //   - /maps/{id}                  (GET/PUT/DELETE): fetch/update/delete the map itself
 //
 // Every route other than the version-file route requires a bearer token.
@@ -271,13 +286,13 @@ func MapsItemHandler(st *store.Store, dataRoot string) http.HandlerFunc {
 			return
 		}
 
-		// Version file serving (but not .../bounds, a distinct JSON
-		// endpoint) is the one route that may be reached without a bearer
-		// token at all, when the map itself opts in via anonymousAllowed.
-		// It's handled before the blanket auth gate below so an anonymous
-		// caller can reach it; every other route still requires a token.
-		isVersionFile := len(segments) >= 3 && segments[1] == "version" &&
-			(len(segments) != 4 || segments[3] != "bounds")
+		// Version file serving (but not a JSON sub-resource like .../bounds
+		// or .../geo-objects[/...], see isVersionSubResourcePath) is the one
+		// route that may be reached without a bearer token at all, when the
+		// map itself opts in via anonymousAllowed. It's handled before the
+		// blanket auth gate below so an anonymous caller can reach it; every
+		// other route still requires a token.
+		isVersionFile := len(segments) >= 3 && segments[1] == "version" && !isVersionSubResourcePath(segments)
 		if isVersionFile {
 			m, err := st.GetMap(r.Context(), id)
 			if err != nil {
@@ -323,6 +338,19 @@ func MapsItemHandler(st *store.Store, dataRoot string) http.HandlerFunc {
 			if _, ok := getViewableMap(w, r, st, id); ok {
 				mapVersionBoundsHandler(dataRoot, id, segments[2])(w, r)
 			}
+			return
+		}
+		if len(segments) == 4 && segments[1] == "version" && segments[3] == "geo-objects" {
+			geoObjectsCollectionHandler(st, id, segments[2])(w, r)
+			return
+		}
+		if len(segments) == 5 && segments[1] == "version" && segments[3] == "geo-objects" {
+			geoObjID, err := uuid.Parse(segments[4])
+			if err != nil {
+				http.Error(w, "invalid geo object id", http.StatusBadRequest)
+				return
+			}
+			geoObjectItemHandler(st, id, segments[2], geoObjID)(w, r)
 			return
 		}
 		if len(segments) != 1 {
