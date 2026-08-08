@@ -158,6 +158,33 @@ curl -X DELETE localhost:8085/maps/<uuid>/permissions/alice -H "Authorization: B
 
 Managing per-map permissions requires `is_admin`, same as the Users API.
 
+#### GeoObjects API
+
+Authenticated CRUD for a `geo_objects` table (`uuid`, `name`, `externalId`, `latitude`, `longitude`, `street`,
+`housenumber`, `postcode`, `createdAt`, `updatedAt`, `createdBy`, `updatedBy`). Every geo object is tied to one
+specific map version (`mapUuid` + `version`, immutable after creation) — e.g. addresses or points of interest
+belonging to a particular tile-pyramid upload. Requires view access to the map to read, `can_edit` (global or
+per-map) to create/update, and `can_delete` (global or per-map) to delete.
+
+```sh
+# create a geo object for a given map version
+curl -X POST localhost:8085/maps/<uuid>/version/<version>/geo-objects -H "Authorization: Bearer <token>" \
+  -d '{"name":"Town Hall","externalId":"ext-1","latitude":52.5,"longitude":13.4,"street":"Main St","housenumber":"1","postcode":"12345"}'
+
+# list a version's geo objects
+curl localhost:8085/maps/<uuid>/version/<version>/geo-objects -H "Authorization: Bearer <token>"
+
+# get one
+curl localhost:8085/maps/<uuid>/version/<version>/geo-objects/<geoObjectUuid> -H "Authorization: Bearer <token>"
+
+# update (replaces name/externalId/latitude/longitude/street/housenumber/postcode)
+curl -X PUT localhost:8085/maps/<uuid>/version/<version>/geo-objects/<geoObjectUuid> -H "Authorization: Bearer <token>" \
+  -d '{"name":"Town Hall","latitude":52.5,"longitude":13.4}'
+
+# delete
+curl -X DELETE localhost:8085/maps/<uuid>/version/<version>/geo-objects/<geoObjectUuid> -H "Authorization: Bearer <token>"
+```
+
 ### Users API
 
 Admin-only (`is_admin`) CRUD for managing accounts. Response objects never include the password hash.
