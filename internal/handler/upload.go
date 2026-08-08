@@ -222,6 +222,10 @@ func extractTar(tarPath, destDir string, gzipped bool) error {
 
 		isDir := hdr.Typeflag == tar.TypeDir
 		name := hdr.Name
+		if strings.Contains(name, "..") {
+			log.Printf("upload: skipping tar entry with parent traversal %q", name)
+			continue
+		}
 		if isDir && !strings.HasSuffix(name, "/") {
 			name += "/"
 		}
@@ -267,6 +271,10 @@ func extractZip(zipPath, destDir string) error {
 	for _, f := range zr.File {
 		if f.Mode()&os.ModeSymlink != 0 {
 			log.Printf("upload: skipping symlink entry %q", f.Name)
+			continue
+		}
+		if strings.Contains(f.Name, "..") {
+			log.Printf("upload: skipping zip entry with parent traversal %q", f.Name)
 			continue
 		}
 		targetPath, ok := resolveExtractTarget(cleanDest, f.Name)
