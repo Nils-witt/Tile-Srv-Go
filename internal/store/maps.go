@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"context"
@@ -53,7 +53,7 @@ func (s *Store) CreateMap(ctx context.Context, name, currentVersion string, visi
 // visibility) every map if bypassVisibility is true — meant to be passed as
 // the acting user's is_admin || can_edit || can_delete.
 func (s *Store) ListMaps(ctx context.Context, username string, bypassVisibility bool) ([]MapRecord, error) {
-	rows, err := s.pool.Query(ctx, `
+	return collectRows(ctx, s.pool, "list maps", `
 		SELECT uuid, name, current_version, visible_to_all, anonymous_allowed, created_at, updated_at, created_by, updated_by
 		FROM maps
 		WHERE $2
@@ -65,24 +65,11 @@ func (s *Store) ListMaps(ctx context.Context, username string, bypassVisibility 
 		          AND (mp.can_view OR mp.can_edit OR mp.can_delete)
 		      )
 		ORDER BY created_at DESC
-	`, username, bypassVisibility)
-	if err != nil {
-		return nil, fmt.Errorf("list maps: %w", err)
-	}
-	defer rows.Close()
-
-	maps := []MapRecord{}
-	for rows.Next() {
+	`, func(rows pgx.Rows) (MapRecord, error) {
 		var m MapRecord
-		if err := rows.Scan(&m.UUID, &m.Name, &m.CurrentVersion, &m.VisibleToAll, &m.AnonymousAllowed, &m.CreatedAt, &m.UpdatedAt, &m.CreatedBy, &m.UpdatedBy); err != nil {
-			return nil, fmt.Errorf("scan map: %w", err)
-		}
-		maps = append(maps, m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list maps: %w", err)
-	}
-	return maps, nil
+		err := rows.Scan(&m.UUID, &m.Name, &m.CurrentVersion, &m.VisibleToAll, &m.AnonymousAllowed, &m.CreatedAt, &m.UpdatedAt, &m.CreatedBy, &m.UpdatedBy)
+		return m, err
+	}, username, bypassVisibility)
 }
 
 // GetMap fetches a single map by id. It returns ErrMapNotFound if it doesn't exist.
@@ -193,29 +180,16 @@ func (s *Store) ListMapVersions(ctx context.Context, id uuid.UUID) ([]MapVersion
 		return nil, err
 	}
 
-	rows, err := s.pool.Query(ctx, `
+	return collectRows(ctx, s.pool, "list map versions", `
 		SELECT version, created_at, created_by
 		FROM map_versions
 		WHERE map_uuid = $1
 		ORDER BY created_at DESC
-	`, id)
-	if err != nil {
-		return nil, fmt.Errorf("list map versions: %w", err)
-	}
-	defer rows.Close()
-
-	versions := []MapVersionRecord{}
-	for rows.Next() {
+	`, func(rows pgx.Rows) (MapVersionRecord, error) {
 		var v MapVersionRecord
-		if err := rows.Scan(&v.Version, &v.CreatedAt, &v.CreatedBy); err != nil {
-			return nil, fmt.Errorf("scan map version: %w", err)
-		}
-		versions = append(versions, v)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list map versions: %w", err)
-	}
-	return versions, nil
+		err := rows.Scan(&v.Version, &v.CreatedAt, &v.CreatedBy)
+		return v, err
+	}, id)
 }
 
 // DeleteMap deletes a map by id (cascading to its versions and permission

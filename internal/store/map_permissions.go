@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"context"
@@ -8,14 +8,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var ErrMapPermissionInvalid = errors.New("map or username does not exist")
 
 // MapPermission is a user's per-map view/edit/delete grant. It only adds
 // capability on top of a user's global Permissions (see Permissions in
-// db.go); a grant is only consulted for a user who lacks the matching
+// store.go); a grant is only consulted for a user who lacks the matching
 // global flag, so it can never take capability away. Edit and delete grants
 // also imply view, since granting someone the ability to modify a map
 // without letting them see it first would be nonsensical.
@@ -52,29 +51,16 @@ func (s *Store) GetMapPermission(ctx context.Context, mapID uuid.UUID, username 
 
 // ListMapPermissions returns every per-map grant for mapID, oldest first.
 func (s *Store) ListMapPermissions(ctx context.Context, mapID uuid.UUID) ([]MapPermissionRecord, error) {
-	rows, err := s.pool.Query(ctx, `
+	return collectRows(ctx, s.pool, "list map permissions", `
 		SELECT username, can_view, can_edit, can_delete, granted_at, granted_by
 		FROM map_permissions
 		WHERE map_uuid = $1
 		ORDER BY granted_at ASC
-	`, mapID)
-	if err != nil {
-		return nil, fmt.Errorf("list map permissions: %w", err)
-	}
-	defer rows.Close()
-
-	perms := []MapPermissionRecord{}
-	for rows.Next() {
+	`, func(rows pgx.Rows) (MapPermissionRecord, error) {
 		var p MapPermissionRecord
-		if err := rows.Scan(&p.Username, &p.CanView, &p.CanEdit, &p.CanDelete, &p.GrantedAt, &p.GrantedBy); err != nil {
-			return nil, fmt.Errorf("scan map permission: %w", err)
-		}
-		perms = append(perms, p)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list map permissions: %w", err)
-	}
-	return perms, nil
+		err := rows.Scan(&p.Username, &p.CanView, &p.CanEdit, &p.CanDelete, &p.GrantedAt, &p.GrantedBy)
+		return p, err
+	}, mapID)
 }
 
 // SetMapPermission creates or replaces username's per-map grant for mapID.
@@ -89,8 +75,7 @@ func (s *Store) SetMapPermission(ctx context.Context, mapID uuid.UUID, username 
 		RETURNING granted_at
 	`, mapID, username, canView, canEdit, canDelete, grantedBy).Scan(&p.GrantedAt)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		if isPgErrCode(err, "23503") {
 			return MapPermissionRecord{}, ErrMapPermissionInvalid
 		}
 		return MapPermissionRecord{}, fmt.Errorf("set map permission: %w", err)

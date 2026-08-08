@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"archive/tar"
@@ -75,6 +75,36 @@ func buildTar(t *testing.T, path string, gzipped bool, entries map[string]string
 		if err := gw.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestResolveExtractTarget(t *testing.T) {
+	dest := t.TempDir()
+	cleanDest := filepath.Clean(dest)
+
+	tests := []struct {
+		name       string
+		entry      string
+		wantOK     bool
+		wantTarget string
+	}{
+		{name: "valid directory entry", entry: "3/1/", wantOK: true, wantTarget: filepath.Join(cleanDest, "3", "1")},
+		{name: "valid file entry", entry: "3/1/2.png", wantOK: true, wantTarget: filepath.Join(cleanDest, "3", "1", "2.png")},
+		{name: "zip-slip attempt", entry: "../../etc/passwd", wantOK: false},
+		{name: "non-numeric directory segment", entry: "3/notes.txt", wantOK: false},
+		{name: "file not matching <number>.png", entry: "3/1/2.jpg", wantOK: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			target, ok := resolveExtractTarget(cleanDest, tc.entry)
+			if ok != tc.wantOK {
+				t.Fatalf("resolveExtractTarget(%q) ok = %v, want %v", tc.entry, ok, tc.wantOK)
+			}
+			if ok && target != tc.wantTarget {
+				t.Fatalf("resolveExtractTarget(%q) target = %q, want %q", tc.entry, target, tc.wantTarget)
+			}
+		})
 	}
 }
 
@@ -260,8 +290,8 @@ func TestEnsureTileIndexes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ensureTileIndexes(dataRoot); err != nil {
-		t.Fatalf("ensureTileIndexes: %v", err)
+	if err := EnsureTileIndexes(dataRoot); err != nil {
+		t.Fatalf("EnsureTileIndexes: %v", err)
 	}
 
 	got, err := os.ReadFile(filepath.Join(v1Dir, "index.json"))
