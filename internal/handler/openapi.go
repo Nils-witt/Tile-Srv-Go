@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	_ "embed"
@@ -8,8 +8,8 @@ import (
 //go:embed openapi.yaml
 var openapiSpec []byte
 
-// openapiHandler serves the raw OpenAPI 3.0 spec (public, unauthenticated).
-func openapiHandler() http.HandlerFunc {
+// OpenAPIHandler serves the raw OpenAPI 3.0 spec (public, unauthenticated).
+func OpenAPIHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

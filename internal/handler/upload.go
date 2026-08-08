@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"archive/tar"
@@ -19,6 +19,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"nilswitt.dev/tileserve-go/internal/store"
 )
 
 // maxUploadSize caps the size of an uploaded map version archive.
@@ -26,7 +28,7 @@ const maxUploadSize = 1 << 30 // 1 GiB
 
 // A map version's extracted contents may only consist of numerically named
 // directories (e.g. a z/x/y tile pyramid, validated via numericSegmentRE in
-// maps_handler.go) and numerically named .png files.
+// maps.go) and numerically named .png files.
 var numericPNGRE = regexp.MustCompile(`^[0-9]+\.png$`)
 
 // uploadMapVersionHandler accepts a zip or tar (optionally gzip-compressed)
@@ -35,16 +37,15 @@ var numericPNGRE = regexp.MustCompile(`^[0-9]+\.png$`)
 // the map's final location first; the DB version is only reserved (and the
 // directory put in place) once extraction fully succeeds, so a bad upload
 // never leaves the map pointing at a broken version.
-func uploadMapVersionHandler(store *Store, dataRoot string, id uuid.UUID) http.HandlerFunc {
+func uploadMapVersionHandler(st *store.Store, dataRoot string, id uuid.UUID) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		if !requireMethod(w, r, http.MethodPost) {
 			return
 		}
 
-		if !requireMapPermission(w, r, store, id,
-			func(p Permissions) bool { return p.CanCreate },
-			func(mp MapPermission) bool { return mp.CanEdit },
+		if !requireMapPermission(w, r, st, id,
+			func(p store.Permissions) bool { return p.CanCreate },
+			func(mp store.MapPermission) bool { return mp.CanEdit },
 		) {
 			return
 		}
@@ -83,15 +84,15 @@ func uploadMapVersionHandler(store *Store, dataRoot string, id uuid.UUID) http.H
 			return
 		}
 
-		mapDir := filepath.Join(dataRoot, id.String())
-		if err := os.MkdirAll(mapDir, 0o755); err != nil {
+		dir := mapDir(dataRoot, id)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			http.Error(w, "failed to prepare storage", http.StatusInternalServerError)
 			return
 		}
 
-		// Staged inside mapDir (not os.TempDir) so the final rename below is
+		// Staged inside dir (not os.TempDir) so the final rename below is
 		// guaranteed to be same-filesystem and therefore atomic.
-		stagingDir, err := os.MkdirTemp(mapDir, ".upload-*")
+		stagingDir, err := os.MkdirTemp(dir, ".upload-*")
 		if err != nil {
 			http.Error(w, "failed to prepare extraction", http.StatusInternalServerError)
 			return
@@ -116,17 +117,13 @@ func uploadMapVersionHandler(store *Store, dataRoot string, id uuid.UUID) http.H
 			return
 		}
 
-		m, err := store.IncrementMapVersion(r.Context(), id, usernameFromContext(r.Context()))
-		switch {
-		case errors.Is(err, ErrMapNotFound):
-			http.Error(w, "map not found", http.StatusNotFound)
-			return
-		case err != nil:
-			http.Error(w, "failed to record new version", http.StatusInternalServerError)
+		m, err := st.IncrementMapVersion(r.Context(), id, usernameFromContext(r.Context()))
+		if err != nil {
+			writeStoreError(w, err, store.ErrMapNotFound, http.StatusNotFound, "map not found", "failed to record new version")
 			return
 		}
 
-		destDir := filepath.Join(mapDir, m.CurrentVersion)
+		destDir := filepath.Join(dir, m.CurrentVersion)
 		if err := os.Rename(stagingDir, destDir); err != nil {
 			http.Error(w, "failed to store version", http.StatusInternalServerError)
 			return
@@ -228,14 +225,8 @@ func extractTar(tarPath, destDir string, gzipped bool) error {
 		if isDir && !strings.HasSuffix(name, "/") {
 			name += "/"
 		}
-		if err := validateExtractedEntryName(name); err != nil {
-			log.Printf("upload: skipping entry: %v", err)
-			continue
-		}
-
-		targetPath := filepath.Join(cleanDest, strings.Trim(name, "/"))
-		if targetPath != cleanDest && !strings.HasPrefix(targetPath, cleanDest+string(os.PathSeparator)) {
-			log.Printf("upload: skipping entry with illegal path %q", hdr.Name)
+		targetPath, ok := resolveExtractTarget(cleanDest, name)
+		if !ok {
 			continue
 		}
 
@@ -278,14 +269,8 @@ func extractZip(zipPath, destDir string) error {
 			log.Printf("upload: skipping symlink entry %q", f.Name)
 			continue
 		}
-		if err := validateExtractedEntryName(f.Name); err != nil {
-			log.Printf("upload: skipping entry: %v", err)
-			continue
-		}
-
-		targetPath := filepath.Join(cleanDest, f.Name)
-		if targetPath != cleanDest && !strings.HasPrefix(targetPath, cleanDest+string(os.PathSeparator)) {
-			log.Printf("upload: skipping entry with illegal path %q", f.Name)
+		targetPath, ok := resolveExtractTarget(cleanDest, f.Name)
+		if !ok {
 			continue
 		}
 
@@ -384,13 +369,13 @@ func writeTileIndex(destDir string) error {
 	return nil
 }
 
-// ensureTileIndexes walks dataRoot for every map ("overlay") directory and
+// EnsureTileIndexes walks dataRoot for every map ("overlay") directory and
 // each of its numeric version subdirectories, generating a missing
 // index.json for any version that doesn't already have one. It's meant to be
 // run once at startup so versions extracted before index.json existed (or a
 // version where a prior index write failed) get backfilled without
 // requiring a re-upload.
-func ensureTileIndexes(dataRoot string) error {
+func EnsureTileIndexes(dataRoot string) error {
 	overlays, err := os.ReadDir(dataRoot)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -435,6 +420,27 @@ func ensureTileIndexes(dataRoot string) error {
 		}
 	}
 	return nil
+}
+
+// resolveExtractTarget validates a zip/tar entry's name (using "/"
+// separators, with a trailing "/" for directories) via
+// validateExtractedEntryName, then resolves it to a target path within
+// cleanDest. ok is false if the entry should be skipped — an invalid name,
+// or a path that would escape cleanDest (zip-slip) — matching
+// extractZip/extractTar's existing behavior of skipping bad entries (logged
+// via log.Printf) rather than failing the whole upload.
+func resolveExtractTarget(cleanDest, name string) (targetPath string, ok bool) {
+	if err := validateExtractedEntryName(name); err != nil {
+		log.Printf("upload: skipping entry: %v", err)
+		return "", false
+	}
+
+	targetPath = filepath.Join(cleanDest, strings.Trim(name, "/"))
+	if targetPath != cleanDest && !strings.HasPrefix(targetPath, cleanDest+string(os.PathSeparator)) {
+		log.Printf("upload: skipping entry with illegal path %q", name)
+		return "", false
+	}
+	return targetPath, true
 }
 
 // validateExtractedEntryName checks that a zip entry's path consists only of

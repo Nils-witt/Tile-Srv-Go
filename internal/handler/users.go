@@ -1,10 +1,10 @@
-package main
+package handler
 
 import (
-	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
+
+	"nilswitt.dev/tileserve-go/internal/store"
 )
 
 type userRequest struct {
@@ -18,8 +18,8 @@ type userRequest struct {
 }
 
 // permissions extracts the global Permissions fields carried by a userRequest.
-func (req userRequest) permissions() Permissions {
-	return Permissions{
+func (req userRequest) permissions() store.Permissions {
+	return store.Permissions{
 		CanCreate: req.CanCreate,
 		CanEdit:   req.CanEdit,
 		CanDelete: req.CanDelete,
@@ -28,21 +28,21 @@ func (req userRequest) permissions() Permissions {
 }
 
 // requireAdmin is a shorthand for requiring the is_admin permission.
-func requireAdmin(w http.ResponseWriter, r *http.Request, store *Store) bool {
-	return requirePermission(w, r, store, func(p Permissions) bool { return p.IsAdmin })
+func requireAdmin(w http.ResponseWriter, r *http.Request, st *store.Store) bool {
+	return requirePermission(w, r, st, func(p store.Permissions) bool { return p.IsAdmin })
 }
 
-// usersCollectionHandler serves the /users collection route (admin-only):
+// UsersCollectionHandler serves the /users collection route (admin-only):
 // GET lists all users, POST creates a new one.
-func usersCollectionHandler(store *Store) http.HandlerFunc {
+func UsersCollectionHandler(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !requireAdmin(w, r, store) {
+		if !requireAdmin(w, r, st) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			users, err := store.ListUsers(r.Context())
+			users, err := st.ListUsers(r.Context())
 			if err != nil {
 				http.Error(w, "failed to list users", http.StatusInternalServerError)
 				return
@@ -51,8 +51,7 @@ func usersCollectionHandler(store *Store) http.HandlerFunc {
 
 		case http.MethodPost:
 			var req userRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid request body", http.StatusBadRequest)
+			if !decodeJSON(w, r, &req) {
 				return
 			}
 			if req.Username == "" || req.Password == "" {
@@ -60,15 +59,12 @@ func usersCollectionHandler(store *Store) http.HandlerFunc {
 				return
 			}
 
-			u, err := store.CreateUser(r.Context(), req.Username, req.Password, req.CN, req.permissions())
-			switch {
-			case errors.Is(err, ErrUserExists):
-				http.Error(w, "user already exists", http.StatusConflict)
-			case err != nil:
-				http.Error(w, "failed to create user", http.StatusInternalServerError)
-			default:
-				writeJSON(w, http.StatusCreated, u)
+			u, err := st.CreateUser(r.Context(), req.Username, req.Password, req.CN, req.permissions())
+			if err != nil {
+				writeStoreError(w, err, store.ErrUserExists, http.StatusConflict, "user already exists", "failed to create user")
+				return
 			}
+			writeJSON(w, http.StatusCreated, u)
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -76,10 +72,10 @@ func usersCollectionHandler(store *Store) http.HandlerFunc {
 	}
 }
 
-// userItemHandler serves the /users/{username} item route (admin-only): PUT
+// UserItemHandler serves the /users/{username} item route (admin-only): PUT
 // updates the user's cn/permissions (and password, if given), DELETE removes
 // the user (an admin may not delete their own account).
-func userItemHandler(store *Store) http.HandlerFunc {
+func UserItemHandler(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		username := strings.Trim(strings.TrimPrefix(r.URL.Path, "/users/"), "/")
 		if username == "" || strings.Contains(username, "/") {
@@ -87,27 +83,23 @@ func userItemHandler(store *Store) http.HandlerFunc {
 			return
 		}
 
-		if !requireAdmin(w, r, store) {
+		if !requireAdmin(w, r, st) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodPut:
 			var req userRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid request body", http.StatusBadRequest)
+			if !decodeJSON(w, r, &req) {
 				return
 			}
 
-			u, err := store.UpdateUser(r.Context(), username, req.CN, req.permissions(), req.Password)
-			switch {
-			case errors.Is(err, ErrUserNotFound):
-				http.Error(w, "user not found", http.StatusNotFound)
-			case err != nil:
-				http.Error(w, "failed to update user", http.StatusInternalServerError)
-			default:
-				writeJSON(w, http.StatusOK, u)
+			u, err := st.UpdateUser(r.Context(), username, req.CN, req.permissions(), req.Password)
+			if err != nil {
+				writeStoreError(w, err, store.ErrUserNotFound, http.StatusNotFound, "user not found", "failed to update user")
+				return
 			}
+			writeJSON(w, http.StatusOK, u)
 
 		case http.MethodDelete:
 			if username == usernameFromContext(r.Context()) {
@@ -115,15 +107,11 @@ func userItemHandler(store *Store) http.HandlerFunc {
 				return
 			}
 
-			err := store.DeleteUser(r.Context(), username)
-			switch {
-			case errors.Is(err, ErrUserNotFound):
-				http.Error(w, "user not found", http.StatusNotFound)
-			case err != nil:
-				http.Error(w, "failed to delete user", http.StatusInternalServerError)
-			default:
-				w.WriteHeader(http.StatusNoContent)
+			if err := st.DeleteUser(r.Context(), username); err != nil {
+				writeStoreError(w, err, store.ErrUserNotFound, http.StatusNotFound, "user not found", "failed to delete user")
+				return
 			}
+			w.WriteHeader(http.StatusNoContent)
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

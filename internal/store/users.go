@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"context"
@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -28,36 +26,23 @@ type UserRecord struct {
 
 // ListUsers returns every user, oldest first.
 func (s *Store) ListUsers(ctx context.Context) ([]UserRecord, error) {
-	rows, err := s.pool.Query(ctx, `
+	return collectRows(ctx, s.pool, "list users", `
 		SELECT username, cn, can_create, can_edit, can_delete, is_admin, created_at
 		FROM users
 		ORDER BY created_at ASC
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("list users: %w", err)
-	}
-	defer rows.Close()
-
-	users := []UserRecord{}
-	for rows.Next() {
+	`, func(rows pgx.Rows) (UserRecord, error) {
 		var u UserRecord
-		if err := rows.Scan(&u.Username, &u.CN, &u.CanCreate, &u.CanEdit, &u.CanDelete, &u.IsAdmin, &u.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan user: %w", err)
-		}
-		users = append(users, u)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list users: %w", err)
-	}
-	return users, nil
+		err := rows.Scan(&u.Username, &u.CN, &u.CanCreate, &u.CanEdit, &u.CanDelete, &u.IsAdmin, &u.CreatedAt)
+		return u, err
+	})
 }
 
 // CreateUser creates a new user. It returns ErrUserExists if username is
 // already taken.
 func (s *Store) CreateUser(ctx context.Context, username, password, cn string, perms Permissions) (UserRecord, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := hashPassword(password)
 	if err != nil {
-		return UserRecord{}, fmt.Errorf("hash password: %w", err)
+		return UserRecord{}, err
 	}
 
 	u := UserRecord{
@@ -72,10 +57,9 @@ func (s *Store) CreateUser(ctx context.Context, username, password, cn string, p
 		INSERT INTO users (username, password_hash, cn, can_create, can_edit, can_delete, is_admin)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING created_at
-	`, username, string(hash), u.CN, u.CanCreate, u.CanEdit, u.CanDelete, u.IsAdmin).Scan(&u.CreatedAt)
+	`, username, hash, u.CN, u.CanCreate, u.CanEdit, u.CanDelete, u.IsAdmin).Scan(&u.CreatedAt)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if isPgErrCode(err, "23505") {
 			return UserRecord{}, ErrUserExists
 		}
 		return UserRecord{}, fmt.Errorf("create user: %w", err)
@@ -90,17 +74,17 @@ func (s *Store) UpdateUser(ctx context.Context, username, cn string, perms Permi
 	var u UserRecord
 	var err error
 	if newPassword != "" {
-		var hash []byte
-		hash, err = bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+		var hash string
+		hash, err = hashPassword(newPassword)
 		if err != nil {
-			return UserRecord{}, fmt.Errorf("hash password: %w", err)
+			return UserRecord{}, err
 		}
 		err = s.pool.QueryRow(ctx, `
 			UPDATE users
 			SET cn = $2, can_create = $3, can_edit = $4, can_delete = $5, is_admin = $6, password_hash = $7
 			WHERE username = $1
 			RETURNING username, cn, can_create, can_edit, can_delete, is_admin, created_at
-		`, username, cn, perms.CanCreate, perms.CanEdit, perms.CanDelete, perms.IsAdmin, string(hash)).
+		`, username, cn, perms.CanCreate, perms.CanEdit, perms.CanDelete, perms.IsAdmin, hash).
 			Scan(&u.Username, &u.CN, &u.CanCreate, &u.CanEdit, &u.CanDelete, &u.IsAdmin, &u.CreatedAt)
 	} else {
 		err = s.pool.QueryRow(ctx, `

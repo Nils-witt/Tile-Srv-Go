@@ -1,10 +1,12 @@
-package main
+package store
 
 import (
 	"context"
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -174,16 +176,55 @@ func (s *Store) GetPermissions(ctx context.Context, username string) (Permission
 // SeedUser creates username with password if it doesn't already exist. Used to
 // bootstrap the first account; it is a no-op if the username is already taken.
 func (s *Store) SeedUser(ctx context.Context, username, password string) error {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := hashPassword(password)
 	if err != nil {
-		return fmt.Errorf("hash seed password: %w", err)
+		return err
 	}
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO users (username, password_hash) VALUES ($1, $2)
 		ON CONFLICT (username) DO NOTHING
-	`, username, string(hash))
+	`, username, hash)
 	if err != nil {
 		return fmt.Errorf("seed user %q: %w", username, err)
 	}
 	return nil
+}
+
+// hashPassword bcrypt-hashes password for storage.
+func hashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("hash password: %w", err)
+	}
+	return string(hash), nil
+}
+
+// isPgErrCode reports whether err is a *pgconn.PgError with the given SQLSTATE code.
+func isPgErrCode(err error, code string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == code
+}
+
+// collectRows runs query against pool and scans every returned row with
+// scan, wrapping any error (including a scan failure) with label for
+// context. It's shared by every Store List* method.
+func collectRows[T any](ctx context.Context, pool *pgxpool.Pool, label, query string, scan func(pgx.Rows) (T, error), args ...any) ([]T, error) {
+	rows, err := pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", label, err)
+	}
+	defer rows.Close()
+
+	items := []T{}
+	for rows.Next() {
+		v, err := scan(rows)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", label, err)
+		}
+		items = append(items, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", label, err)
+	}
+	return items, nil
 }

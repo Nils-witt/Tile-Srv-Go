@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"nilswitt.dev/tileserve-go/internal/store"
 )
 
 // numericSegmentRE matches a purely numeric path segment. It's shared by
@@ -17,6 +19,16 @@ import (
 // validateExtractedEntryName in upload.go (validating a z/x/y tile pyramid
 // entry's directory segments during archive extraction).
 var numericSegmentRE = regexp.MustCompile(`^[0-9]+$`)
+
+// mapDir returns a map's storage directory under dataRoot.
+func mapDir(dataRoot string, id uuid.UUID) string {
+	return filepath.Join(dataRoot, id.String())
+}
+
+// mapVersionDir returns a specific version's extracted-tiles directory under dataRoot.
+func mapVersionDir(dataRoot string, id uuid.UUID, version string) string {
+	return filepath.Join(mapDir(dataRoot, id), version)
+}
 
 type mapRequest struct {
 	Name             string `json:"name"`
@@ -32,11 +44,53 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// decodeJSON decodes r's body as JSON into v, writing a 400 response and
+// returning false if the body isn't valid JSON.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// writeStoreError maps a Store error to an HTTP response: sentinel maps to
+// sentinelStatus with sentinelMsg (e.g. a not-found or validation error),
+// any other non-nil error maps to a 500 with failMsg.
+func writeStoreError(w http.ResponseWriter, err error, sentinel error, sentinelStatus int, sentinelMsg, failMsg string) {
+	if errors.Is(err, sentinel) {
+		http.Error(w, sentinelMsg, sentinelStatus)
+		return
+	}
+	http.Error(w, failMsg, http.StatusInternalServerError)
+}
+
+// requireMethod rejects a request whose method isn't method with a 405. It
+// returns true when the caller may continue.
+func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	if r.Method != method {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	return true
+}
+
+// getPermissionsOrFail fetches the acting user's global permissions, writing
+// a 500 response and returning ok=false if that fails.
+func getPermissionsOrFail(w http.ResponseWriter, r *http.Request, st *store.Store) (perms store.Permissions, ok bool) {
+	perms, err := st.GetPermissions(r.Context(), usernameFromContext(r.Context()))
+	if err != nil {
+		http.Error(w, "failed to check permissions", http.StatusInternalServerError)
+		return store.Permissions{}, false
+	}
+	return perms, true
+}
+
 // requireAuthenticated rejects a request with no bearer token. /maps/ is
-// mounted behind optionalAuth (see main.go) so that a map's version file
-// serving route can allow anonymous requests when that map opts in via
-// anonymousAllowed; every other route under /maps/ calls this to restore
-// the usual "must be logged in" requirement.
+// mounted behind OptionalAuth (see cmd/tileserve-go/main.go) so that a
+// map's version file serving route can allow anonymous requests when that
+// map opts in via anonymousAllowed; every other route under /maps/ calls
+// this to restore the usual "must be logged in" requirement.
 func requireAuthenticated(w http.ResponseWriter, r *http.Request) bool {
 	if usernameFromContext(r.Context()) == "" {
 		http.Error(w, "missing bearer token", http.StatusUnauthorized)
@@ -48,10 +102,9 @@ func requireAuthenticated(w http.ResponseWriter, r *http.Request) bool {
 // requirePermission checks the acting user's global permissions and writes an
 // error response if the request should not proceed. It returns true when the
 // caller may continue.
-func requirePermission(w http.ResponseWriter, r *http.Request, store *Store, allowed func(Permissions) bool) bool {
-	perms, err := store.GetPermissions(r.Context(), usernameFromContext(r.Context()))
-	if err != nil {
-		http.Error(w, "failed to check permissions", http.StatusInternalServerError)
+func requirePermission(w http.ResponseWriter, r *http.Request, st *store.Store, allowed func(store.Permissions) bool) bool {
+	perms, ok := getPermissionsOrFail(w, r, st)
+	if !ok {
 		return false
 	}
 	if !allowed(perms) {
@@ -66,18 +119,17 @@ func requirePermission(w http.ResponseWriter, r *http.Request, store *Store, all
 // always pass), or failing that, if they hold a matching per-map grant. A
 // per-map grant only ever adds capability on top of the global flags, never
 // removes it.
-func requireMapPermission(w http.ResponseWriter, r *http.Request, store *Store, mapID uuid.UUID, globalAllowed func(Permissions) bool, mapAllowed func(MapPermission) bool) bool {
+func requireMapPermission(w http.ResponseWriter, r *http.Request, st *store.Store, mapID uuid.UUID, globalAllowed func(store.Permissions) bool, mapAllowed func(store.MapPermission) bool) bool {
 	username := usernameFromContext(r.Context())
-	perms, err := store.GetPermissions(r.Context(), username)
-	if err != nil {
-		http.Error(w, "failed to check permissions", http.StatusInternalServerError)
+	perms, ok := getPermissionsOrFail(w, r, st)
+	if !ok {
 		return false
 	}
 	if perms.IsAdmin || globalAllowed(perms) {
 		return true
 	}
 
-	mp, err := store.GetMapPermission(r.Context(), mapID, username)
+	mp, err := st.GetMapPermission(r.Context(), mapID, username)
 	if err != nil {
 		http.Error(w, "failed to check permissions", http.StatusInternalServerError)
 		return false
@@ -96,12 +148,12 @@ func requireMapPermission(w http.ResponseWriter, r *http.Request, store *Store, 
 // hiding a map from someone who can already act on it would be
 // nonsensical), or because they hold a per-map grant (view, edit, or
 // delete — any of the three implies visibility).
-func canViewMap(ctx context.Context, store *Store, m MapRecord, username string) (bool, error) {
+func canViewMap(ctx context.Context, st *store.Store, m store.MapRecord, username string) (bool, error) {
 	if m.VisibleToAll || m.CreatedBy == username {
 		return true, nil
 	}
 
-	perms, err := store.GetPermissions(ctx, username)
+	perms, err := st.GetPermissions(ctx, username)
 	if err != nil {
 		return false, err
 	}
@@ -109,7 +161,7 @@ func canViewMap(ctx context.Context, store *Store, m MapRecord, username string)
 		return true, nil
 	}
 
-	mp, err := store.GetMapPermission(ctx, m.UUID, username)
+	mp, err := st.GetMapPermission(ctx, m.UUID, username)
 	if err != nil {
 		return false, err
 	}
@@ -118,8 +170,8 @@ func canViewMap(ctx context.Context, store *Store, m MapRecord, username string)
 
 // requireMapView checks canViewMap and writes a 403 if it fails. It returns
 // true when the caller may continue.
-func requireMapView(w http.ResponseWriter, r *http.Request, store *Store, m MapRecord) bool {
-	ok, err := canViewMap(r.Context(), store, m, usernameFromContext(r.Context()))
+func requireMapView(w http.ResponseWriter, r *http.Request, st *store.Store, m store.MapRecord) bool {
+	ok, err := canViewMap(r.Context(), st, m, usernameFromContext(r.Context()))
 	if err != nil {
 		http.Error(w, "failed to check permissions", http.StatusInternalServerError)
 		return false
@@ -134,38 +186,33 @@ func requireMapView(w http.ResponseWriter, r *http.Request, store *Store, m MapR
 // getViewableMap fetches id and checks the acting user may view it, writing
 // the appropriate error response (404/403/500) if not. ok is false when the
 // caller should stop.
-func getViewableMap(w http.ResponseWriter, r *http.Request, store *Store, id uuid.UUID) (m MapRecord, ok bool) {
-	m, err := store.GetMap(r.Context(), id)
-	switch {
-	case errors.Is(err, ErrMapNotFound):
-		http.Error(w, "map not found", http.StatusNotFound)
-		return MapRecord{}, false
-	case err != nil:
-		http.Error(w, "failed to get map", http.StatusInternalServerError)
-		return MapRecord{}, false
+func getViewableMap(w http.ResponseWriter, r *http.Request, st *store.Store, id uuid.UUID) (m store.MapRecord, ok bool) {
+	m, err := st.GetMap(r.Context(), id)
+	if err != nil {
+		writeStoreError(w, err, store.ErrMapNotFound, http.StatusNotFound, "map not found", "failed to get map")
+		return store.MapRecord{}, false
 	}
-	if !requireMapView(w, r, store, m) {
-		return MapRecord{}, false
+	if !requireMapView(w, r, st, m) {
+		return store.MapRecord{}, false
 	}
 	return m, true
 }
 
-// mapsCollectionHandler serves the /maps collection route: GET lists the
+// MapsCollectionHandler serves the /maps collection route: GET lists the
 // maps visible to the caller, POST creates a new map (requires the
 // can_create global permission).
-func mapsCollectionHandler(store *Store) http.HandlerFunc {
+func MapsCollectionHandler(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			username := usernameFromContext(r.Context())
-			perms, err := store.GetPermissions(r.Context(), username)
-			if err != nil {
-				http.Error(w, "failed to check permissions", http.StatusInternalServerError)
+			perms, ok := getPermissionsOrFail(w, r, st)
+			if !ok {
 				return
 			}
 			bypassVisibility := perms.IsAdmin || perms.CanEdit || perms.CanDelete
 
-			maps, err := store.ListMaps(r.Context(), username, bypassVisibility)
+			maps, err := st.ListMaps(r.Context(), username, bypassVisibility)
 			if err != nil {
 				http.Error(w, "failed to list maps", http.StatusInternalServerError)
 				return
@@ -173,13 +220,12 @@ func mapsCollectionHandler(store *Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, maps)
 
 		case http.MethodPost:
-			if !requirePermission(w, r, store, func(p Permissions) bool { return p.CanCreate }) {
+			if !requirePermission(w, r, st, func(p store.Permissions) bool { return p.CanCreate }) {
 				return
 			}
 
 			var req mapRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid request body", http.StatusBadRequest)
+			if !decodeJSON(w, r, &req) {
 				return
 			}
 			if req.Name == "" {
@@ -187,7 +233,7 @@ func mapsCollectionHandler(store *Store) http.HandlerFunc {
 				return
 			}
 
-			m, err := store.CreateMap(r.Context(), req.Name, req.CurrentVersion, req.VisibleToAll, req.AnonymousAllowed, usernameFromContext(r.Context()))
+			m, err := st.CreateMap(r.Context(), req.Name, req.CurrentVersion, req.VisibleToAll, req.AnonymousAllowed, usernameFromContext(r.Context()))
 			if err != nil {
 				http.Error(w, "failed to create map", http.StatusInternalServerError)
 				return
@@ -200,7 +246,7 @@ func mapsCollectionHandler(store *Store) http.HandlerFunc {
 	}
 }
 
-// mapsItemHandler dispatches every route nested under /maps/{id}/... by
+// MapsItemHandler dispatches every route nested under /maps/{id}/... by
 // hand-parsing the path (the stdlib mux only matches the /maps/ prefix):
 //
 //   - /maps/{id}/version/{version}/...  (except .../bounds): serves the
@@ -214,7 +260,7 @@ func mapsCollectionHandler(store *Store) http.HandlerFunc {
 //   - /maps/{id}                  (GET/PUT/DELETE): fetch/update/delete the map itself
 //
 // Every route other than the version-file route requires a bearer token.
-func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
+func MapsItemHandler(st *store.Store, dataRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/maps/"), "/")
 		segments := strings.Split(path, "/")
@@ -233,23 +279,19 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 		isVersionFile := len(segments) >= 3 && segments[1] == "version" &&
 			(len(segments) != 4 || segments[3] != "bounds")
 		if isVersionFile {
-			m, err := store.GetMap(r.Context(), id)
-			switch {
-			case errors.Is(err, ErrMapNotFound):
-				http.Error(w, "map not found", http.StatusNotFound)
-				return
-			case err != nil:
-				http.Error(w, "failed to get map", http.StatusInternalServerError)
+			m, err := st.GetMap(r.Context(), id)
+			if err != nil {
+				writeStoreError(w, err, store.ErrMapNotFound, http.StatusNotFound, "map not found", "failed to get map")
 				return
 			}
 			if !m.AnonymousAllowed {
-				if !requireAuthenticated(w, r) || !requireMapView(w, r, store, m) {
+				if !requireAuthenticated(w, r) || !requireMapView(w, r, st, m) {
 					return
 				}
 			}
 
 			version := segments[2]
-			versionDir := filepath.Join(dataRoot, id.String(), version)
+			versionDir := mapVersionDir(dataRoot, id, version)
 			prefix := "/maps/" + strings.Join(segments[:3], "/") + "/"
 			http.StripPrefix(prefix, http.FileServer(http.Dir(versionDir))).ServeHTTP(w, r)
 			return
@@ -260,25 +302,25 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 		}
 
 		if len(segments) == 2 && segments[1] == "upload" {
-			uploadMapVersionHandler(store, dataRoot, id)(w, r)
+			uploadMapVersionHandler(st, dataRoot, id)(w, r)
 			return
 		}
 		if len(segments) == 2 && segments[1] == "versions" {
-			if _, ok := getViewableMap(w, r, store, id); ok {
-				mapVersionsHandler(store, id)(w, r)
+			if _, ok := getViewableMap(w, r, st, id); ok {
+				mapVersionsHandler(st, id)(w, r)
 			}
 			return
 		}
 		if len(segments) == 2 && segments[1] == "permissions" {
-			mapPermissionsCollectionHandler(store, id)(w, r)
+			mapPermissionsCollectionHandler(st, id)(w, r)
 			return
 		}
 		if len(segments) == 3 && segments[1] == "permissions" {
-			mapPermissionItemHandler(store, id, segments[2])(w, r)
+			mapPermissionItemHandler(st, id, segments[2])(w, r)
 			return
 		}
 		if len(segments) == 4 && segments[1] == "version" && segments[3] == "bounds" {
-			if _, ok := getViewableMap(w, r, store, id); ok {
+			if _, ok := getViewableMap(w, r, st, id); ok {
 				mapVersionBoundsHandler(dataRoot, id, segments[2])(w, r)
 			}
 			return
@@ -290,22 +332,21 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			m, ok := getViewableMap(w, r, store, id)
+			m, ok := getViewableMap(w, r, st, id)
 			if ok {
 				writeJSON(w, http.StatusOK, m)
 			}
 
 		case http.MethodPut:
-			if !requireMapPermission(w, r, store, id,
-				func(p Permissions) bool { return p.CanEdit },
-				func(mp MapPermission) bool { return mp.CanEdit },
+			if !requireMapPermission(w, r, st, id,
+				func(p store.Permissions) bool { return p.CanEdit },
+				func(mp store.MapPermission) bool { return mp.CanEdit },
 			) {
 				return
 			}
 
 			var req mapRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid request body", http.StatusBadRequest)
+			if !decodeJSON(w, r, &req) {
 				return
 			}
 			if req.Name == "" {
@@ -313,33 +354,26 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 				return
 			}
 
-			m, err := store.UpdateMap(r.Context(), id, req.Name, req.CurrentVersion, req.VisibleToAll, req.AnonymousAllowed, usernameFromContext(r.Context()))
-			switch {
-			case errors.Is(err, ErrMapNotFound):
-				http.Error(w, "map not found", http.StatusNotFound)
-			case err != nil:
-				http.Error(w, "failed to update map", http.StatusInternalServerError)
-			default:
-				writeJSON(w, http.StatusOK, m)
+			m, err := st.UpdateMap(r.Context(), id, req.Name, req.CurrentVersion, req.VisibleToAll, req.AnonymousAllowed, usernameFromContext(r.Context()))
+			if err != nil {
+				writeStoreError(w, err, store.ErrMapNotFound, http.StatusNotFound, "map not found", "failed to update map")
+				return
 			}
+			writeJSON(w, http.StatusOK, m)
 
 		case http.MethodDelete:
-			if !requireMapPermission(w, r, store, id,
-				func(p Permissions) bool { return p.CanDelete },
-				func(mp MapPermission) bool { return mp.CanDelete },
+			if !requireMapPermission(w, r, st, id,
+				func(p store.Permissions) bool { return p.CanDelete },
+				func(mp store.MapPermission) bool { return mp.CanDelete },
 			) {
 				return
 			}
 
-			err := store.DeleteMap(r.Context(), id)
-			switch {
-			case errors.Is(err, ErrMapNotFound):
-				http.Error(w, "map not found", http.StatusNotFound)
-			case err != nil:
-				http.Error(w, "failed to delete map", http.StatusInternalServerError)
-			default:
-				w.WriteHeader(http.StatusNoContent)
+			if err := st.DeleteMap(r.Context(), id); err != nil {
+				writeStoreError(w, err, store.ErrMapNotFound, http.StatusNotFound, "map not found", "failed to delete map")
+				return
 			}
+			w.WriteHeader(http.StatusNoContent)
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -348,22 +382,18 @@ func mapsItemHandler(store *Store, dataRoot string) http.HandlerFunc {
 }
 
 // mapVersionsHandler returns the upload history for a map.
-func mapVersionsHandler(store *Store, id uuid.UUID) http.HandlerFunc {
+func mapVersionsHandler(st *store.Store, id uuid.UUID) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		if !requireMethod(w, r, http.MethodGet) {
 			return
 		}
 
-		versions, err := store.ListMapVersions(r.Context(), id)
-		switch {
-		case errors.Is(err, ErrMapNotFound):
-			http.Error(w, "map not found", http.StatusNotFound)
-		case err != nil:
-			http.Error(w, "failed to list map versions", http.StatusInternalServerError)
-		default:
-			writeJSON(w, http.StatusOK, versions)
+		versions, err := st.ListMapVersions(r.Context(), id)
+		if err != nil {
+			writeStoreError(w, err, store.ErrMapNotFound, http.StatusNotFound, "map not found", "failed to list map versions")
+			return
 		}
+		writeJSON(w, http.StatusOK, versions)
 	}
 }
 
@@ -375,9 +405,9 @@ type mapPermissionRequest struct {
 
 // mapPermissionsCollectionHandler lists a map's per-user permission grants.
 // Managing per-map permissions is admin-only, same as the global Users API.
-func mapPermissionsCollectionHandler(store *Store, id uuid.UUID) http.HandlerFunc {
+func mapPermissionsCollectionHandler(st *store.Store, id uuid.UUID) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !requireAdmin(w, r, store) {
+		if !requireAdmin(w, r, st) {
 			return
 		}
 		if r.Method != http.MethodGet {
@@ -385,7 +415,7 @@ func mapPermissionsCollectionHandler(store *Store, id uuid.UUID) http.HandlerFun
 			return
 		}
 
-		perms, err := store.ListMapPermissions(r.Context(), id)
+		perms, err := st.ListMapPermissions(r.Context(), id)
 		if err != nil {
 			http.Error(w, "failed to list map permissions", http.StatusInternalServerError)
 			return
@@ -397,32 +427,28 @@ func mapPermissionsCollectionHandler(store *Store, id uuid.UUID) http.HandlerFun
 // mapPermissionItemHandler grants or revokes a single user's per-map
 // permission. Managing per-map permissions is admin-only, same as the global
 // Users API.
-func mapPermissionItemHandler(store *Store, id uuid.UUID, username string) http.HandlerFunc {
+func mapPermissionItemHandler(st *store.Store, id uuid.UUID, username string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !requireAdmin(w, r, store) {
+		if !requireAdmin(w, r, st) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodPut:
 			var req mapPermissionRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid request body", http.StatusBadRequest)
+			if !decodeJSON(w, r, &req) {
 				return
 			}
 
-			p, err := store.SetMapPermission(r.Context(), id, username, req.CanView, req.CanEdit, req.CanDelete, usernameFromContext(r.Context()))
-			switch {
-			case errors.Is(err, ErrMapPermissionInvalid):
-				http.Error(w, "map or username does not exist", http.StatusBadRequest)
-			case err != nil:
-				http.Error(w, "failed to set map permission", http.StatusInternalServerError)
-			default:
-				writeJSON(w, http.StatusOK, p)
+			p, err := st.SetMapPermission(r.Context(), id, username, req.CanView, req.CanEdit, req.CanDelete, usernameFromContext(r.Context()))
+			if err != nil {
+				writeStoreError(w, err, store.ErrMapPermissionInvalid, http.StatusBadRequest, "map or username does not exist", "failed to set map permission")
+				return
 			}
+			writeJSON(w, http.StatusOK, p)
 
 		case http.MethodDelete:
-			if err := store.DeleteMapPermission(r.Context(), id, username); err != nil {
+			if err := st.DeleteMapPermission(r.Context(), id, username); err != nil {
 				http.Error(w, "failed to delete map permission", http.StatusInternalServerError)
 				return
 			}

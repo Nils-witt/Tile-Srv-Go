@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"errors"
@@ -35,8 +35,7 @@ type tileBounds struct {
 // as a preview map's initial view.
 func mapVersionBoundsHandler(dataRoot string, id uuid.UUID, version string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		if !requireMethod(w, r, http.MethodGet) {
 			return
 		}
 		if !numericSegmentRE.MatchString(version) {
@@ -44,16 +43,13 @@ func mapVersionBoundsHandler(dataRoot string, id uuid.UUID, version string) http
 			return
 		}
 
-		versionDir := filepath.Join(dataRoot, id.String(), version)
+		versionDir := mapVersionDir(dataRoot, id, version)
 		bounds, err := computeTileBounds(versionDir)
-		switch {
-		case errors.Is(err, errNoTiles):
-			http.Error(w, "no tiles found for this version", http.StatusNotFound)
-		case err != nil:
-			http.Error(w, "failed to compute bounds", http.StatusInternalServerError)
-		default:
-			writeJSON(w, http.StatusOK, bounds)
+		if err != nil {
+			writeStoreError(w, err, errNoTiles, http.StatusNotFound, "no tiles found for this version", "failed to compute bounds")
+			return
 		}
+		writeJSON(w, http.StatusOK, bounds)
 	}
 }
 

@@ -6,6 +6,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+
+	"nilswitt.dev/tileserve-go/internal/handler"
+	"nilswitt.dev/tileserve-go/internal/store"
 )
 
 // envOrDefault returns the value of the environment variable key, or
@@ -35,23 +38,23 @@ func main() {
 	secret := []byte(*jwtSecret)
 
 	ctx := context.Background()
-	store, err := NewStore(ctx, *dbDSN)
+	st, err := store.NewStore(ctx, *dbDSN)
 	if err != nil {
 		log.Fatalf("connect to postgres: %v", err)
 	}
-	defer store.Close()
+	defer st.Close()
 
-	if err := store.Migrate(ctx); err != nil {
+	if err := st.Migrate(ctx); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
 
 	if *seedUsername != "" && *seedPassword != "" {
-		if err := store.SeedUser(ctx, *seedUsername, *seedPassword); err != nil {
+		if err := st.SeedUser(ctx, *seedUsername, *seedPassword); err != nil {
 			log.Fatalf("seed user: %v", err)
 		}
 	}
 
-	if err := ensureTileIndexes(*dataRoot); err != nil {
+	if err := handler.EnsureTileIndexes(*dataRoot); err != nil {
 		log.Fatalf("backfill tile indexes: %v", err)
 	}
 
@@ -63,27 +66,27 @@ func main() {
 	})
 	// GET /login: serves the login HTML page. POST /login: exchanges
 	// username/password for a JWT and a refresh token.
-	mux.HandleFunc("/login", loginHandler(secret, store))
+	mux.HandleFunc("/login", handler.LoginHandler(secret, st))
 	// POST /refresh: exchanges a refresh token for a new JWT and refresh token.
-	mux.HandleFunc("/refresh", refreshHandler(secret, store))
+	mux.HandleFunc("/refresh", handler.RefreshHandler(secret, st))
 	// GET /ui/: serves the self-contained management UI (public, unauthenticated).
-	mux.HandleFunc("/ui/", uiHandler())
+	mux.HandleFunc("/ui/", handler.UIHandler())
 	// GET /openapi.yaml: serves the OpenAPI 3.0 spec (public, unauthenticated).
-	mux.HandleFunc("/openapi.yaml", openapiHandler())
+	mux.HandleFunc("/openapi.yaml", handler.OpenAPIHandler())
 	// GET /maps, POST /maps: list maps visible to the caller / create a map.
-	mux.Handle("/maps", requireAuth(secret, mapsCollectionHandler(store)))
+	mux.Handle("/maps", handler.RequireAuth(secret, handler.MapsCollectionHandler(st)))
 	// /maps/{id}, /maps/{id}/upload, /maps/{id}/versions,
 	// /maps/{id}/permissions[/{username}], /maps/{id}/version/{v}[/bounds|...]:
-	// see mapsItemHandler for the full per-route breakdown.
+	// see handler.MapsItemHandler for the full per-route breakdown.
 	//
-	// optionalAuth, not requireAuth: a map's version file serving route may
+	// OptionalAuth, not RequireAuth: a map's version file serving route may
 	// be reachable without a token at all if that map has anonymousAllowed
-	// set — mapsItemHandler enforces auth itself on every other route.
-	mux.Handle("/maps/", optionalAuth(secret, mapsItemHandler(store, *dataRoot)))
+	// set — MapsItemHandler enforces auth itself on every other route.
+	mux.Handle("/maps/", handler.OptionalAuth(secret, handler.MapsItemHandler(st, *dataRoot)))
 	// GET /users, POST /users: list users / create a user (admin-only).
-	mux.Handle("/users", requireAuth(secret, usersCollectionHandler(store)))
+	mux.Handle("/users", handler.RequireAuth(secret, handler.UsersCollectionHandler(st)))
 	// PUT /users/{username}, DELETE /users/{username}: update / delete a user (admin-only).
-	mux.Handle("/users/", requireAuth(secret, userItemHandler(store)))
+	mux.Handle("/users/", handler.RequireAuth(secret, handler.UserItemHandler(st)))
 
 	addr := ":" + *port
 	log.Printf("tileserve-go listening on %s", addr)
