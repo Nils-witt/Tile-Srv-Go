@@ -300,6 +300,73 @@
     </div>
   </div>
 
+  <div id="geo-overlay" class="modal-overlay hidden">
+    <div class="modal" style="height:auto; max-height:88vh;">
+      <div class="modal-header">
+        <h2 id="geo-title">Geo objects</h2>
+        <button class="secondary" id="geo-close">Close</button>
+      </div>
+      <div style="padding:1rem; overflow:auto;">
+        <p id="geo-error" class="hidden" style="color:#dc2626"></p>
+        <div class="row">
+          <div class="field">
+            <label for="geo-version">Version</label>
+            <select id="geo-version"></select>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>External ID</th>
+              <th>Latitude</th>
+              <th>Longitude</th>
+              <th>Street</th>
+              <th>House no.</th>
+              <th>Postcode</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="geo-body"></tbody>
+        </table>
+        <p id="geo-empty" class="muted hidden">No geo objects for this version yet.</p>
+
+        <h2 style="margin-top:1.25rem">Add geo object</h2>
+        <form id="geo-create-form" class="row">
+          <div class="field">
+            <label for="geo-create-name">Name</label>
+            <input id="geo-create-name" required>
+          </div>
+          <div class="field">
+            <label for="geo-create-external">External ID</label>
+            <input id="geo-create-external">
+          </div>
+          <div class="field">
+            <label for="geo-create-lat">Latitude</label>
+            <input id="geo-create-lat" type="number" step="any" required>
+          </div>
+          <div class="field">
+            <label for="geo-create-lon">Longitude</label>
+            <input id="geo-create-lon" type="number" step="any" required>
+          </div>
+          <div class="field">
+            <label for="geo-create-street">Street</label>
+            <input id="geo-create-street">
+          </div>
+          <div class="field">
+            <label for="geo-create-housenumber">House no.</label>
+            <input id="geo-create-housenumber">
+          </div>
+          <div class="field">
+            <label for="geo-create-postcode">Postcode</label>
+            <input id="geo-create-postcode">
+          </div>
+          <button type="submit">Add</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script>
     const TOKEN_KEY = 'tileserve_token';
@@ -501,6 +568,13 @@
       permBtn.onclick = () => openPermissions(m);
       actions.append(permBtn);
 
+      const geoBtn = document.createElement('button');
+      geoBtn.className = 'secondary';
+      geoBtn.textContent = 'Geo objects';
+      geoBtn.disabled = !m.currentVersion;
+      if (!m.currentVersion) geoBtn.title = 'No uploaded version yet';
+      geoBtn.onclick = () => openGeoObjects(m);
+      actions.append(geoBtn);
 
       actions.append(deleteBtn);
 
@@ -788,6 +862,215 @@
     permAddBtn.addEventListener('click', () => {
       if (!permAddUser.value) return;
       grantMapPermission(permAddUser.value, permAddView.checked, permAddEdit.checked, permAddDelete.checked);
+    });
+
+    const geoOverlay = document.getElementById('geo-overlay');
+    const geoTitle = document.getElementById('geo-title');
+    const geoVersionSelect = document.getElementById('geo-version');
+    const geoBody = document.getElementById('geo-body');
+    const geoEmptyEl = document.getElementById('geo-empty');
+    const geoErrorEl = document.getElementById('geo-error');
+    const geoClose = document.getElementById('geo-close');
+    const geoCreateForm = document.getElementById('geo-create-form');
+    let geoMapId = null;
+
+    function geoError(message) {
+      if (!message) {
+        geoErrorEl.classList.add('hidden');
+        return;
+      }
+      geoErrorEl.textContent = message;
+      geoErrorEl.classList.remove('hidden');
+    }
+
+    // Geo objects are tied to one specific map version, so the modal opens
+    // on the map's currentVersion and offers every uploaded version (from
+    // GET /maps/{id}/versions) as an alternative via the select above the
+    // table.
+    async function openGeoObjects(m) {
+      geoMapId = m.uuid;
+      geoTitle.textContent = 'Geo objects — ' + m.name;
+      geoError(null);
+      geoOverlay.classList.remove('hidden');
+
+      try {
+        const res = await api('/maps/' + geoMapId + '/versions');
+        const versions = await res.json();
+        const versionValues = versions.map(v => v.version);
+        if (!versionValues.includes(m.currentVersion)) versionValues.unshift(m.currentVersion);
+        geoVersionSelect.innerHTML = versionValues.map(v => '<option value="' + v + '">v' + v + '</option>').join('');
+        geoVersionSelect.value = m.currentVersion;
+      } catch (err) {
+        if (err.message !== 'unauthorized') geoError(err.message);
+        geoVersionSelect.innerHTML = '<option value="' + m.currentVersion + '">v' + m.currentVersion + '</option>';
+      }
+
+      await loadGeoObjects();
+    }
+
+    function closeGeoObjects() {
+      geoOverlay.classList.add('hidden');
+      geoMapId = null;
+    }
+
+    function geoObjectPath(suffix) {
+      return '/maps/' + geoMapId + '/version/' + encodeURIComponent(geoVersionSelect.value) + '/geo-objects' + suffix;
+    }
+
+    async function loadGeoObjects() {
+      geoError(null);
+      try {
+        const res = await api(geoObjectPath(''));
+        renderGeoObjects(await res.json());
+      } catch (err) {
+        if (err.message !== 'unauthorized') geoError(err.message);
+      }
+    }
+
+    function renderGeoObjects(objs) {
+      geoBody.innerHTML = '';
+      geoEmptyEl.classList.toggle('hidden', objs.length > 0);
+      for (const g of objs) {
+        geoBody.appendChild(renderGeoObjectRow(g));
+      }
+    }
+
+    function renderGeoObjectRow(g) {
+      const tr = document.createElement('tr');
+
+      const nameInput = document.createElement('input');
+      nameInput.className = 'inline';
+      nameInput.value = g.name;
+
+      const externalInput = document.createElement('input');
+      externalInput.className = 'inline';
+      externalInput.value = g.externalId || '';
+
+      const latInput = document.createElement('input');
+      latInput.type = 'number';
+      latInput.step = 'any';
+      latInput.className = 'inline';
+      latInput.value = g.latitude;
+
+      const lonInput = document.createElement('input');
+      lonInput.type = 'number';
+      lonInput.step = 'any';
+      lonInput.className = 'inline';
+      lonInput.value = g.longitude;
+
+      const streetInput = document.createElement('input');
+      streetInput.className = 'inline';
+      streetInput.value = g.street || '';
+
+      const houseInput = document.createElement('input');
+      houseInput.className = 'inline';
+      houseInput.value = g.housenumber || '';
+
+      const postcodeInput = document.createElement('input');
+      postcodeInput.className = 'inline';
+      postcodeInput.value = g.postcode || '';
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'secondary';
+      saveBtn.textContent = 'Save';
+      saveBtn.onclick = () => updateGeoObject(g.uuid, {
+        name: nameInput.value,
+        externalId: externalInput.value,
+        latitude: parseFloat(latInput.value),
+        longitude: parseFloat(lonInput.value),
+        street: streetInput.value,
+        housenumber: houseInput.value,
+        postcode: postcodeInput.value,
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'danger';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.onclick = () => deleteGeoObject(g.uuid);
+
+      const actionsTd = document.createElement('td');
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      actions.append(saveBtn, deleteBtn);
+      actionsTd.append(actions);
+
+      const nameTd = document.createElement('td');
+      nameTd.appendChild(nameInput);
+      const externalTd = document.createElement('td');
+      externalTd.appendChild(externalInput);
+      const latTd = document.createElement('td');
+      latTd.appendChild(latInput);
+      const lonTd = document.createElement('td');
+      lonTd.appendChild(lonInput);
+      const streetTd = document.createElement('td');
+      streetTd.appendChild(streetInput);
+      const houseTd = document.createElement('td');
+      houseTd.appendChild(houseInput);
+      const postcodeTd = document.createElement('td');
+      postcodeTd.appendChild(postcodeInput);
+
+      tr.append(nameTd, externalTd, latTd, lonTd, streetTd, houseTd, postcodeTd, actionsTd);
+      return tr;
+    }
+
+    async function createGeoObject(payload) {
+      geoError(null);
+      try {
+        await api(geoObjectPath(''), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        await loadGeoObjects();
+      } catch (err) {
+        if (err.message !== 'unauthorized') geoError(err.message);
+      }
+    }
+
+    async function updateGeoObject(id, payload) {
+      geoError(null);
+      try {
+        await api(geoObjectPath('/' + id), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        await loadGeoObjects();
+      } catch (err) {
+        if (err.message !== 'unauthorized') geoError(err.message);
+      }
+    }
+
+    async function deleteGeoObject(id) {
+      if (!confirm('Delete this geo object?')) return;
+      geoError(null);
+      try {
+        await api(geoObjectPath('/' + id), { method: 'DELETE' });
+        await loadGeoObjects();
+      } catch (err) {
+        if (err.message !== 'unauthorized') geoError(err.message);
+      }
+    }
+
+    geoClose.addEventListener('click', closeGeoObjects);
+    geoOverlay.addEventListener('click', (e) => {
+      if (e.target === geoOverlay) closeGeoObjects();
+    });
+    geoVersionSelect.addEventListener('change', loadGeoObjects);
+    geoCreateForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const payload = {
+        name: document.getElementById('geo-create-name').value,
+        externalId: document.getElementById('geo-create-external').value,
+        latitude: parseFloat(document.getElementById('geo-create-lat').value),
+        longitude: parseFloat(document.getElementById('geo-create-lon').value),
+        street: document.getElementById('geo-create-street').value,
+        housenumber: document.getElementById('geo-create-housenumber').value,
+        postcode: document.getElementById('geo-create-postcode').value,
+      };
+      createGeoObject(payload).then(() => {
+        e.target.reset();
+      });
     });
 
     async function uploadVersion(id, file) {
